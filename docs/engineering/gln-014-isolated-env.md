@@ -45,7 +45,7 @@
 | --- | --- |
 | `DB` | 上表 D1 |
 | `MCP_RESOURCE_URL` | `https://cloud-guanlan-gln014-3c872be6.dangjingtao.workers.dev/mcp` |
-| `CLOUD_AUTH_ISSUER` | `https://cloud-auth.invalid/`（**占位**，见 §7） |
+| `CLOUD_AUTH_ISSUER` | 初建时为占位 `https://cloud-auth.invalid/`；**t10 起改为非生产 Cloud Auth 的 HTTPS URL**（当前 `https://<current-host>`，见 §7 G1）。注意：它必须是 URL，不能填 `mira:cloud-auth`（那是 JWT 的 `iss` 常量，填进变量会让 `/mcp` 503） |
 | `CLOUD_AUTH_JWKS_URL` | `https://cloud-auth.invalid/.well-known/jwks.json`（**占位**，见 §7） |
 | `MCP_AUDIENCE` | `mira:cloud-guanlan` |
 | `MCP_REQUIRED_SCOPES` | 未设 → 默认 `guanlan.read` |
@@ -86,20 +86,26 @@
 
 ## 5. 如何重建（可复制）
 
-前置：维护者凭证文件 `C:\Users\Administrator\.mira-secrets\cloudflare.env`（`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`），
-以及共享注册密钥文件 `C:\Users\Administrator\.mira-secrets\guanlan-registration.env`。
+> **前置（重要，F-30-1）**：`migrations/0005_guanlan_registration_receipts.sql` 与 `src/registration.ts` **目前只在未合并分支**
+> `feat/gln-015-registration-receiver`（PR #29，SHA `57c7b52`）上；`dev` 分支**没有**这两个文件，直接在 `dev` 上照抄本节会在
+> `d1 migrations apply` 阶段因缺 `0005` 而建不出收据表（注册端点会以 `500 registration_unavailable` fail closed）。
+> 二选一：① 先合并 PR #29；② 从该分支构建：`git worktree add ../gln-015 57c7b52`，在**那个** worktree 里跑 `npm ci && npm run build`，
+> 后续命令的 `.\dist\worker.mjs` 与 `.\migrations\*.sql` 都指该 worktree。本节记录的实测环境即用 ②。
+
+前置：维护者凭证文件 `$env:USERPROFILE\.mira-secrets\cloudflare.env`（`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`），
+以及共享注册密钥文件 `$env:USERPROFILE\.mira-secrets\guanlan-registration.env`。
 两者都**只在运行环境注入**，不写入仓库、`.env` 或日志。
 
 ```powershell
 # 0) 同一次 pwsh 调用内注入（值不打印）
-$raw = [IO.File]::ReadAllText('C:\Users\Administrator\.mira-secrets\cloudflare.env')
+$raw = [IO.File]::ReadAllText("$env:USERPROFILE\.mira-secrets\cloudflare.env")
 $env:CLOUDFLARE_API_TOKEN  = [regex]::Match($raw,'(?m)^\s*CLOUDFLARE_API_TOKEN\s*=(.*)$').Groups[1].Value.Trim()
 $env:CLOUDFLARE_ACCOUNT_ID = [regex]::Match($raw,'(?m)^\s*CLOUDFLARE_ACCOUNT_ID\s*=(.*)$').Groups[1].Value.Trim()
-$reg = [IO.File]::ReadAllText('C:\Users\Administrator\.mira-secrets\guanlan-registration.env')
+$reg = [IO.File]::ReadAllText("$env:USERPROFILE\.mira-secrets\guanlan-registration.env")
 $env:MIRA_GUANLAN_REGISTRATION_SECRET = [regex]::Match($reg,'(?m)^MIRA_GUANLAN_REGISTRATION_SECRET=(.+)$').Groups[1].Value.Trim()
 
-# 1) 构建（仓库内）
-cd <cloud-mcp-guanlan worktree>; npm ci; npm run build
+# 1) 构建（在含 0005/registration.ts 的 worktree 内）
+cd <cloud-mcp-guanlan worktree at 57c7b52>; npm ci; npm run build
 
 # 2) 建独立 D1（非生产）
 $suffix = -join ((1..8) | % { '{0:x}' -f (Get-Random -Minimum 0 -Maximum 16) })
@@ -147,26 +153,51 @@ $env:MIRA_GUANLAN_REGISTRATION_SECRET | .\node_modules\.bin\wrangler.cmd secret 
 ## 6. 如何销毁
 
 需要删除的资源只有两个：**Worker**（`cloud-guanlan-gln014-3c872be6`，连同其 secret 绑定）与 **D1**（`cloud-guanlan-gln014-3c872be6`）。
+下面整段自包含，可直接复制执行：
 
 ```powershell
-# 先在同一个 pwsh 调用里注入凭证（同 §5 第 0 步）
-.\node_modules\.bin\wrangler.cmd delete --config "$tmp\wrangler.jsonc"          # 删 Worker（含 secret 绑定）
-.\node_modules\.bin\wrangler.cmd d1 delete $name --skip-confirmation            # 删 D1（不可恢复）
-Remove-Item -Recurse -Force "$tmp"                                              # 删仓库外临时配置与产物
+# 0) 注入凭证（值不打印），并定位仓库外配置
+$raw = [IO.File]::ReadAllText("$env:USERPROFILE\.mira-secrets\cloudflare.env")
+$env:CLOUDFLARE_API_TOKEN  = [regex]::Match($raw,'(?m)^\s*CLOUDFLARE_API_TOKEN\s*=(.*)$').Groups[1].Value.Trim()
+$env:CLOUDFLARE_ACCOUNT_ID = [regex]::Match($raw,'(?m)^\s*CLOUDFLARE_ACCOUNT_ID\s*=(.*)$').Groups[1].Value.Trim()
+$tmp  = "$env:LOCALAPPDATA\Temp\gln014-env"
+$name = if (Test-Path "$tmp\env-name.txt") { (Get-Content "$tmp\env-name.txt" -Raw).Trim() } else { "cloud-guanlan-gln014-3c872be6" }
+
+cd <含 wrangler 的 cloud-mcp-guanlan worktree>
+# 1) 删 Worker（--yes 跳过交互确认；secret 绑定随 Worker 一起消失）
+.\node_modules\.bin\wrangler.cmd delete --config "$tmp\wrangler.jsonc" --yes
+# 2) 删 D1（不可恢复）
+.\node_modules\.bin\wrangler.cmd d1 delete $name --skip-confirmation
+# 3) 清理仓库外临时配置与产物（内含 D1 UUID）
+Remove-Item -Recurse -Force $tmp
 ```
 
-- 删除 D1 会一并丢弃所有空间行与收据，不可恢复；销毁前确认已无验证依赖。
-- **绝不触碰**账号下现有 `cloud-guanlan-gln003-canary` 与 `mira-shiyan` 两个库，以及任何既有 Worker 脚本。
+- 删除 D1 会一并丢弃所有空间行与收据，不可恢复；销毁前确认已无验证依赖（**t9 未跑完前不要销毁**）。
+- 账号下另有 `cloud-guanlan-gln003-canary`、`mira-shiyan` 两个库与 13 个既有 Worker，**都不属于本环境**，销毁时不要对它们执行任何删除命令。
 
-## 7. 仍缺的条件（阻塞真实链路验收的部分）
+### 6.1 「本卡未改变既有资源」的可复核快照（F-30-2）
 
-| # | 缺口 | 影响 | 解除方 |
+本卡执行过的**变更类**命令只有：`d1 create`（新库）、`d1 migrations apply`（仅对新库）、`secret put`（仅对新 Worker）、`deploy`（仅对新 Worker），以及一次 `d1 execute` 写入了 t10 用的合成 fixture 行。
+**没有对任何既有资源执行变更命令**（无 delete / rename / 权限修改）。以下是事后只读快照（`wrangler d1 list` 与 Workers API `GET /accounts/<已脱敏>/workers/scripts`，2026-11-04 采集）：
+
+| D1 库 | `created_at`（UTC） | 归属 |
+| --- | --- | --- |
+| `cloud-guanlan-gln014-3c872be6` | 2026-11-03T17:22:57Z | 本卡创建 |
+| `cloud-guanlan-gln003-canary` | 2026-10-31T17:18:26Z | 既有，未改 |
+| `mira-shiyan` | 2026-08-31T01:23:39Z | 既有，未改 |
+
+Worker 脚本共 14 个：13 个既有脚本的 `modified_on` 全部 ≤ `2026-11-03T14:49:04Z`（早于本卡首次 deploy），第 14 个是本卡创建的同名 Worker，`modified_on = 2026-11-03T17:54:03Z`。
+
+## 7. 缺口状态（2026-11-04 更新）
+
+| # | 缺口 | 当前状态 | 解除方 |
 | --- | --- | --- | --- |
-| G1 | **非生产 Cloud Auth 实例**（公网可达的 JWKS + 签发端点）。当前 `CLOUD_AUTH_JWKS_URL` 是 `https://cloud-auth.invalid/...` 占位 | 任何 bearer 都 401（fail closed）；**「错误 audience 401」只验证到「JWKS 不可验证」分支**，真正的 `iss`/`aud`/`scope` 校验要等替换成真实 JWKS 后才能验证 | auth-dev（禁止指向生产 `cloud-auth.tomzlab.cn`） |
-| G2 | **测试账号 + 设备绑定 Cloud Session** | 无法走 GLN-013 `POST /v1/service-credentials` 取得真实令牌 | auth-dev（t23） |
-| G3 | **真实空间行** | 已用合成 UUID 证明接收端可建行；真实账号的行必须由 GLN-012 向 `…/internal/guanlan-registrations` 投递（outbox → `delivered`）产生 | auth-dev 配置 `MIRA_GUANLAN_REGISTRATION_URL` 指向本端点 |
-| G4 | **已批准新闻源** | `poc_sources`/`poc_news` 现为 0 行，`guanlan_news_list` 只能返回空集，无法验证有内容的读路径 | 维护者批准源清单 + ingest 授权 |
+| G1 | **非生产 Cloud Auth 实例**（公网可达 JWKS） | **已临时满足**：JWKS 指向 auth-dev t23 实例的 localhost.run 隧道（`CLOUD_AUTH_JWKS_URL=https://<current-host>/.well-known/jwks.json`，`kid=gln013-t23-1`），真实令牌已被接受（见 t10 验收记录）。仍属**临时设施**：隧道重连换 host，换址期间 `/mcp` 全部 401（fail closed） | auth-dev；长期需常驻非生产入口（禁止指向生产 `cloud-auth.tomzlab.cn`） |
+| G2 | **测试账号 + 设备绑定 Cloud Session** | **已满足**（t23）：`127.0.0.1:8788` 实例 + 设备绑定会话 + `POST /v1/service-credentials` 现签（TTL 300s） | auth-dev |
+| G3 | **真实空间行** | **已满足**：测试账号经 GLN-012 真实投递 `pending → delivered`（attempts=2），D1 里 `accountId == consumerId` 的空间行存在，`/mcp` 不再返回 `guanlan_principal_unavailable` | auth-dev |
+| G4 | **已批准新闻源 / 真实内容** | **仍缺**：`poc_sources`/`poc_news` 只有 t10 用的 1 行合成 fixture；真实采集内容未验证 | 维护者批准源清单 + ingest 授权 |
 | G5 | 真实模型 / 企业微信通道 | 不属于本卡与 GLN-014 范围 | lead 统一排期 |
+| G6 | **错误 audience 负例** | **blocker**：非生产实例多次掉线，Shiyan audience 令牌未取到，资源服务侧 `aud` 拒绝目前只有单测覆盖 | auth-dev 实例稳定后补跑 |
 
 ## 8. 与 t10（GLN-014 L3 验收）的接口
 
