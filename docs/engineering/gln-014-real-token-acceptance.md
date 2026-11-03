@@ -237,6 +237,8 @@ Pi 侧接入时预期能观察到的失败形态（便于区分问题归属）�
 | Guanlan Worker 变量 | `CLOUD_AUTH_JWKS_URL=https://mira-auth-jwks-test.pages.dev/.well-known/jwks.json`；`CLOUD_AUTH_ISSUER=https://mira-auth-jwks-test.pages.dev`（**仅测试期元数据占位**，真实授权服务器以生产为准） |
 | 部署版本 | `8bfa761c-7bfb-43b4-bd4c-5ca5bf720501`（只改变量，未改代码、未动 D1） |
 | 真实令牌自检 | `initialize` 200、`tools/list` 200、`guanlan_whoami` 200（`consumerEqualsAccount:true`、scopes `[read,write]`）、`guanlan_news_recent` 200（`count=1`，只含自己的文章）、跨账户 `decide` 仍 `guanlan_decision_not_available` |
+| 隧道/代理下线后的复验 | 8788 签发端点 200、8789 代理**已关闭**；本机现签成功（`aud=mira:cloud-guanlan`、`ttl=300`、`consumer_eq_sub=true`）后 `/mcp` 的 `initialize`/`tools/list`/`whoami` 仍 **200** ⇒ Worker 端已与隧道彻底解耦（2026-11-04） |
+| 公钥一致性（双方独立核对） | 我方：Pages 内容与部署副本 `same_x=true`、`has_d=false`；auth-dev 侧：从 Pages 取回后与其本机 `signing.pub.pem` 导出的 JWK 比对 **`pages_matches_local=true`**、`kid=gln013-t23-1`、无 `d` ⇒ 静态副本确实是这把钥匙的公钥，排除「发布了另一把公钥」的静默错误 |
 
 **平台约束（重要，解释了为什么不是「另一个 Worker」）**：原计划用独立 Worker 提供 JWKS，实测**不可行** —— Cloudflare 拒绝同一 `*.workers.dev` 区域内的 Worker→Worker 子请求，返回 `404` + 正文 `error code: 1042`。用诊断路由 `/selftest` 复现（该次部署 version `c205fdb2…`）：
 
@@ -252,5 +254,5 @@ Pi 侧接入时预期能观察到的失败形态（便于区分问题归属）�
 **边界（不得被误读）**：
 1. 这是**隔离测试环境的稳定性措施**，不是产品形态。生产形态必须使用**常驻 Cloud Auth 的真实 JWKS**（或其等价的受管发布），而不是人工静态化公钥。
 2. **公钥静态发布 ≠ 密钥托管**：私钥始终在 auth-dev 本机（签发实例内），这里只有公钥。静态化带来的代价是：**密钥轮换后必须重新发布**，否则 Worker 会 401（fail closed）。轮换时按「取新 JWKS → 覆盖 `jwks.json` → `wrangler pages deploy` → 冒烟 whoami」执行。
-3. 隧道**不再**是 Worker 的依赖，只保留供本机现签（`mint.mjs` 需要实例的签发端点）。隧道挂掉不再影响 `/mcp` 的令牌校验。
+3. 隧道**已完全退出链路**：auth-dev 已按要求关闭隧道与 8789 代理；现签只需本机 8788 签发端点（`mint.mjs` 直连 loopback）。因此「换 host / 隧道断线」不再影响 `/mcp` 的令牌校验，反之签发端点宕机只影响「拿新令牌」。
 4. 该 Pages 项目与诊断 Worker 均属**待销毁**资源（与 D1/Worker 同期清理）。
