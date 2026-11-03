@@ -249,10 +249,99 @@ Pi 侧接入时预期能观察到的失败形态（便于区分问题归属）�
              "status":404,"bytes":17,"preview":"error code: 1042\n"}]}
 ```
 
-因此改用 **Pages**（`*.pages.dev` 属不同区域，Worker 可正常抓取）。诊断 Worker `mira-auth-jwks-test` 保留为**平台约束的证据**，它不参与运行时链路，销毁清单里与其它资源一并删除。若坚持用 Worker 承载 JWKS，唯一可行路径是 Service Binding + 改 Guanlan 代码，本轮明确**不**采用（避免为测试稳定性改产品代码）。
+因此改用 **Pages**（`*.pages.dev` 属不同区域，Worker 可正常抓取）。诊断 Worker `mira-auth-jwks-test` 曾作为平台约束证据保留，**已于 2026-11-04 删除**（证据即上面的 `/selftest` 输出，保留在本文档中），以免与同名 Pages 项目混淆。若坚持用 Worker 承载 JWKS，唯一可行路径是 Service Binding + 改 Guanlan 代码，本轮明确**不**采用（避免为测试稳定性改产品代码）。
 
 **边界（不得被误读）**：
 1. 这是**隔离测试环境的稳定性措施**，不是产品形态。生产形态必须使用**常驻 Cloud Auth 的真实 JWKS**（或其等价的受管发布），而不是人工静态化公钥。
 2. **公钥静态发布 ≠ 密钥托管**：私钥始终在 auth-dev 本机（签发实例内），这里只有公钥。静态化带来的代价是：**密钥轮换后必须重新发布**，否则 Worker 会 401（fail closed）。轮换时按「取新 JWKS → 覆盖 `jwks.json` → `wrangler pages deploy` → 冒烟 whoami」执行。
 3. 隧道**已完全退出链路**：auth-dev 已按要求关闭隧道与 8789 代理；现签只需本机 8788 签发端点（`mint.mjs` 直连 loopback）。因此「换 host / 隧道断线」不再影响 `/mcp` 的令牌校验，反之签发端点宕机只影响「拿新令牌」。
-4. 该 Pages 项目与诊断 Worker 均属**待销毁**资源（与 D1/Worker 同期清理）。
+4. 该 Pages 项目属**待销毁**资源（与 D1/Worker 同期清理）。
+
+## 14. 真实令牌读到**真实新闻**（2026-11-04，t28）
+
+### 14.1 为什么补这一节
+
+此前 t9 的短链路 `whoami` + `news_recent` 都是 200，但 `news_recent` 返回 **0 条** —— 该身份唯一那篇是 t10 用于 CAS 验证的合成文章，已被 `decide` 成 `ignored`（`version=2`），默认过滤（unread + pending）下自然为空。**"调用成功但 0 条"无法区分"工具通了"和"查错了"**，所以这里补一条能被默认查询读到的条目。
+
+### 14.2 结论先说：这条是**真实新闻**，不是合成数据
+
+用仓库既有采集链路（GLN-008 允许清单 → 调度器 → 采集器 → 解析器 → D1）真实抓取了一个**已批准的公开源**，因此 `poc_news` 里新增的 5 行是**真实公开文章**（标题/链接来自 feed 本身），而不是我手写的 fixture。合成与真实的边界如下：
+
+| 数据 | 性质 | 来源 |
+| --- | --- | --- |
+| `t10-fixture-source`、`t10-fixture-source-b` 的 2 行 | **合成**（URL 为 `https://fixture.invalid/...`，只为 CAS/跨账户隔离而造） | t10 的 seed（本文档 §5） |
+| `gln008-hnrss-newest` 的 5 行 | **真实公开新闻**：经允许清单内真实 feed 采集 | 采集器真实 HTTP 抓取（本机时间 2026-11-04 03:18 +08:00） |
+| 该账户的订阅行 3 行 | **合成配置**（把合成账户 `5728cbcd…` 挂到这些源上；产品里应由空间/订阅流程产生） | `%TEMP%\gln014-env\seed-t28.sql`（仓库外，不入库） |
+
+> 证据口径：本文档**不记录真实新闻标题、作者、完整 URL**，只记录"字段存在性/长度/URL host/时间"，避免把第三方内容与个人可识别信息写进仓库。合成数据一律带 `fixture` 前缀并在上表标注。
+
+### 14.3 做法（未改任何实现、未加迁移或工具）
+
+1. **源来自既有允许清单**：`src/source-allowlist.ts` 里 GLN-008 已批准的 `https://hnrss.org/newest?count=5`（`label: "Hacker News RSS (5 items)"`）。本轮**没有**新增条目、没有改代码。
+2. **在 `poc_sources` 建一条源行**（`gln008-hnrss-newest`，`due_at` 设为过去），并给 `5728cbcd…` 建 account/consumer 订阅行。这是**配置 seed**，脚本见 14.4；业务表结构未变。
+3. **触发一次真实采集**：隔离环境的 `triggers.crons` 平时为 `[]`，本轮**临时**加了 `*/1 * * * *`（deploy `a01b0bf0-6b4b-4ab7-b1fa-5ed3cca21d74`），采集完成后**立即移除**（deploy `1a0ea145-c276-43bd-a909-6fccc91660d7`，`GET …/schedules` 已为 `[]`）。
+4. **用真实令牌读回**：现签（TTL 300s）后走真实 `/mcp`。
+
+采集日志（D1 `poc_sources`）：`gln008-hnrss-newest` → `last_status=succeeded`、`last_checked_at=2026-11-03T19:18:25.366Z`；`inserted=5`。
+
+### 14.4 可复现命令（全部在仓库外）
+
+```powershell
+# 0) 注入凭证 + 定位临时配置（-2 分钟前到期，保证下一轮 cron 立即领取）
+$tmp = "$env:LOCALAPPDATA\Temp\gln014-env"; $name = (Get-Content "$tmp\env-name.txt" -Raw).Trim()
+
+# 1) seed（仓库外脚本；含 3 条订阅/source 行，无业务表结构变更）
+#    %TEMP%\gln014-env\seed-t28.sql 内容：
+#    INSERT OR IGNORE INTO poc_sources (id,url,interval_hours,due_at)
+#      VALUES ('gln008-hnrss-newest','https://hnrss.org/newest?count=5',1,strftime('%Y-%m-%dT%H:%M:%SZ','now','-2 minutes'));
+#    INSERT OR IGNORE INTO guanlan_account_subscriptions ... SELECT ... WHERE account_id LIKE '5728cbcd%';
+#    INSERT OR IGNORE INTO guanlan_consumer_subscriptions ... SELECT ... WHERE account_id LIKE '5728cbcd%';
+.\node_modules\.bin\wrangler.cmd d1 execute $name --remote --config "$tmp\wrangler-cron.jsonc" --file "$tmp\seed-t28.sql"
+
+# 2) 临时开 cron 采集（采集完立刻用 crons:[] 的配置再 deploy 一次收回）
+.\node_modules\.bin\wrangler.cmd deploy --config "$tmp\wrangler-cron.jsonc"   # crons: ["*/1 * * * *"]
+Start-Sleep -Seconds 150
+.\node_modules\.bin\wrangler.cmd deploy --config "$tmp\wrangler.jsonc"       # crons: []
+
+# 3) 现签 + 真实读（客户端在仓库外，只打印脱敏摘要）
+node "$env:TEMP\gln013-t23\mint.mjs" "$env:TEMP\gln013-t23" guanlan.read guanlan.write
+$env:MCP_BASE="https://$name.dangjingtao.workers.dev"; $env:MINT_DIR="$env:TEMP\gln013-t23"
+node "$env:TEMP\gln014-env\t28-read.mjs"
+```
+
+### 14.5 结果（真实令牌 → 真实 `/mcp` → 真实 D1）
+
+| 项 | 值 |
+| --- | --- |
+| `initialize` / `tools/call` | 200 / 200 |
+| `guanlan_news_recent`（`limit:10`，默认过滤） | **`count=5`**，端到端耗时 **1190 ms**（含本机经代理到 Cloudflare） |
+| 字段完整性 | 每条都含 `id`、`title`、`url`、`summary`、`sourceId`、`publishedAt`、`ingestedAt`、`status`、`stateVersion` |
+| `stateVersion` 初值 | **0**（未决策），`status=pending` |
+| `publishedAt` 范围 | `2026-11-03T18:58:49Z` ~ `2026-11-03T19:03:11Z`（全部落在采集前 25 分钟内） |
+| URL host 分布 | `arxiv.org`、`blog.melnib.one`、`lflank.wordpress.com`、`www.bloomberg.com`、`yeet.cx`（**只记 host，不记路径与标题**） |
+| 分页字段 | 响应含 `count`/`items`/`limit`/`nextCursor` |
+
+**D1 行数变化（可复核）**
+
+| 表 | 变化 |
+| --- | --- |
+| `poc_sources` | 2 → 3（+`gln008-hnrss-newest`） |
+| `poc_news` | 2 → 7（+5 真实；`fixture` 仍 2 行） |
+| `guanlan_account_subscriptions` / `guanlan_consumer_subscriptions` | 2 → 3 各（+该源） |
+| `guanlan_consumer_news_states` | 1 → 1（**没有**因为采集写入新状态行；新文章 `stateVersion=0` 由读路径合成） |
+
+**隔离未破坏（N7 复验）**：同一令牌读全部状态时 `count=6`（5 真实 + 自己的合成文章），`seenB=false`（账户 B 的 `fixture-source-b` 文章仍不可见）；对 B 的文章 `decide` 仍返回 `guanlan_decision_not_available`。
+
+### 14.6 顺带发现（与 G4 有关）
+
+- 允许清单里的 **`https://developers.cloudflare.com/changelog/rss/index.xml` 采不了**：采集器有 `MAX_FEED_BYTES = 128 KiB` 上限，该 feed 超限 → `last_status=failed`、`last_error=feed_too_large`（真实抓取被拒绝，不是解析失败）。`https://www.cloudflarestatus.com/history.atom` 未在本轮验证。
+- 因此**维护者批准新闻源时要把"feed 体积"作为一条准入条件**，否则批准的源可能永远采不进来。
+- 两条 `fixture.invalid` 源在采集轮次里按预期 `source_host_rejected`（允许清单外的域名一律拒绝，fail closed）—— 说明"合成源不会被误当真源采集"。
+
+### 14.7 边界
+
+1. 这 5 条是**第三方公开新闻**，其内容属于不可信数据（提示注入风险），Pi 侧必须当数据处理、不得当指令（见组织 AGENTS 硬边界 4）。
+2. 采集**仍是测试期行为**：产品化的新闻源清单（G4）仍需维护者批准；本轮只用了 GLN-008 既有测试允许清单，**没有**新增源、没有改允许清单、没有新增迁移或工具。
+3. 该账户的订阅行是**合成配置**；真实产品里订阅来自空间流程，不能把 seed 当成产品能力。
+4. 采集靠临时 cron 触发一次；**隔离环境已恢复 `triggers.crons: []`**，不会持续采集。
+
