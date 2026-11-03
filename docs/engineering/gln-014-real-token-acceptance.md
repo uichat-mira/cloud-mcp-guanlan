@@ -10,13 +10,13 @@
 | 组件 | 事实 |
 | --- | --- |
 | 资源服务 | `https://cloud-guanlan-gln014-3c872be6.dangjingtao.workers.dev`（`workers_dev: true`，`triggers.crons: []`） |
-| 部署版本 | `752ae9d7-…`（§3/§4 主链路）、`dbf9ae4a-…`（§5.2 N6/N7）、`2958d284-cd98-4a1a-b12d-b258ec1ac31c`（JWKS 隧道再次换址后按新 host 重 deploy，用于给 t9 保留可用环境；重 deploy 后 `initialize`/`tools/list`/`whoami`/`news_recent` 均 200，决策账本仍 `version=2`、`decided_at` 未变）。三次 deploy 之间**只改 JWKS/issuer 变量**，未改代码 |
+| 部署版本 | `752ae9d7-…`（§3/§4 主链路）、`dbf9ae4a-…`（§5.2 N6/N7）、`2958d284-…`（隧道换址后重指）、**`8bfa761c-7bfb-43b4-bd4c-5ca5bf720501`（当前，§13 静态 JWKS）**。各次 deploy 之间**只改 JWKS/issuer 变量**，未改代码、未动 D1；`8bfa761c` 之后真实令牌 `whoami`/`news_recent` 均 200，决策账本未变 |
 | D1 | `cloud-guanlan-gln014-3c872be6`，迁移 0001..0005 |
 | Cloud Auth（非生产） | `127.0.0.1:8788`（auth-dev t23 实例），签发 `POST /v1/service-credentials` |
-| JWKS | `https://<current-host>/.well-known/jwks.json`（localhost.run 临时隧道；单 key `kid=gln013-t23-1`、`kty=OKP`/`Ed25519`/`EdDSA`） |
+| JWKS | **`https://mira-auth-jwks-test.pages.dev/.well-known/jwks.json`**（§13：Cloudflare Pages 静态托管公钥，`cache-control: public, max-age=300`；单 key `kid=gln013-t23-1`、`kty=OKP`/`Ed25519`/`EdDSA`、无 `d`）。t10 早期证据使用的是当时可用的 localhost.run 隧道地址 |
 | 主体 | 前缀 `5728cbcd`（`sha256_12 = a5600cdf992a`），`accountId == consumerId`（维护者裁决①） |
 
-Worker 绑定：`DB`、`MCP_RESOURCE_URL`、`MCP_AUDIENCE=mira:cloud-guanlan`、`CLOUD_AUTH_JWKS_URL=https://<host>/.well-known/jwks.json`、`CLOUD_AUTH_ISSUER=https://<host>`。
+Worker 绑定：`DB`、`MCP_RESOURCE_URL`、`MCP_AUDIENCE=mira:cloud-guanlan`、`CLOUD_AUTH_JWKS_URL=https://mira-auth-jwks-test.pages.dev/.well-known/jwks.json`、`CLOUD_AUTH_ISSUER=https://mira-auth-jwks-test.pages.dev`（后者仅测试期元数据占位，见 §13）。
 
 > **契约澄清（易错点）**：`CLOUD_AUTH_ISSUER` 是 RFC 9728 发现里对外公布的 **OAuth 授权服务器 URL**，`resolveMcpConfig` 要求它是合法 HTTPS URL；JWT 的 `iss` 由代码常量 `CLOUD_AUTH_TOKEN_ISSUER = "mira:cloud-auth"` 单独校验。因此**不能**把 `CLOUD_AUTH_ISSUER` 设成 `mira:cloud-auth`（会被判 `cloud_auth_issuer` → `/mcp` 503）。见 `src/mcp/config.ts:82-83` 与 `src/mcp/config.ts:114`。
 
@@ -133,7 +133,8 @@ D1 佐证：`guanlan_consumer_news_states` 仍为 **1 行 / version 2**（第 4 
 
 | 项 | 结果 | 来源 |
 | --- | --- | --- |
-| JWKS 不可达时拒绝令牌 | **401**（占位 `cloud-auth.invalid` 期间所有令牌 401） | t18 冒烟 S4；本轮 host 轮换期间同样只出现 401，没有 5xx 或放行 |
+| JWKS 不可达时拒绝令牌 | **401**（占位 `cloud-auth.invalid` 期间所有令牌 401） | t18 冒烟 S4；本轮隧道 host 轮换期间同样只出现 401，没有 5xx 或放行 |
+| 同级 Worker→Worker 子请求 | **被平台拒绝**：`404` + `error code: 1042`（同 `*.workers.dev` 区域） | §13 `/selftest` 诊断部署 `c205fdb2…` |
 | RFC 9728 metadata | 200，`resource`/`scopes_supported`/`bearer_methods_supported`/`authorization_servers` 正确 | t18 S2（变量替换后 host 变了，字段结构不变） |
 | 未知路径 | 404 `not_found` | t18 S5 |
 | Host/Origin 校验 | 既有单测；本轮真实请求未触发 403（`Origin` 未发送、`Host` 为 Worker 自身） | `src/mcp/server.ts:326-331` |
@@ -143,12 +144,11 @@ D1 佐证：`guanlan_consumer_news_states` 仍为 **1 行 / version 2**（第 4 
 ## 8. 复现步骤
 
 ```powershell
-# 0) 每次 deploy 前从文件读 JWKS host（隧道重连会换 host，禁止用聊天里的旧值）
-$h = (Get-Content "$env:TEMP\gln013-t23\current-host.txt").Trim()
+# 0) JWKS 现在是静态发布（§13），不再依赖隧道；只有「本机现签」需要 auth-dev 的实例（127.0.0.1:8788）
 
 # 1) 只改变量重 deploy（不重建 D1；配置在仓库外，含 D1 UUID）
-#    CLOUD_AUTH_JWKS_URL = https://$h/.well-known/jwks.json
-#    CLOUD_AUTH_ISSUER   = https://$h            # 必须是 https URL，不能是 mira:cloud-auth
+#    CLOUD_AUTH_JWKS_URL = https://mira-auth-jwks-test.pages.dev/.well-known/jwks.json
+#    CLOUD_AUTH_ISSUER   = https://mira-auth-jwks-test.pages.dev   # 必须是 https URL，不能是 mira:cloud-auth
 .\node_modules\.bin\wrangler.cmd deploy --config "$env:LOCALAPPDATA\Temp\gln014-env\wrangler.jsonc"
 
 # 2) 现签令牌（TTL 300s，只打印摘要，令牌落本机受限文件）
@@ -172,7 +172,7 @@ node "$env:TEMP\gln014-env\wrong-audience.mjs"           # N6 错误 audience（
 
 1. **内容侧是 fixture**：`poc_sources`/`poc_news` 里只有一行合成文章（URL `https://fixture.invalid/...`），因为维护者尚未批准任何真实新闻源（G4）。这证明「读→判→重读」的**机制与身份链路**，不证明真实采集内容。身份、令牌、JWKS、Worker、D1、CAS、幂等全部真实。
 2. **身份与数据**：真实令牌只有 `5728cbcd` 一个主体；第二个账户 `33333333…` 是**显式合成**的（真实走 GLN-015 接收端 + 真实 D1 写入），只用于跨账户隔离测试，它在 Cloud Auth 侧没有身份。因此 N7（A 读不到 B 的数据）已验证，N11（B 的令牌读 A 的数据）、N9（无空间）、N10（禁用账户）仍是 blocker，不以推断代替证据。
-3. **JWKS 是临时隧道**：localhost.run 重连会换 host；换 host 期间 `/mcp` 全部 401（fail closed）。真实长期验证需要非生产 Cloud Auth 的公网常驻入口。
+3. **JWKS 托管方式**：早期证据用的是 localhost.run 临时隧道（换 host 期间 `/mcp` 全部 401，fail closed）；2026-11-04 起改为 **Cloudflare Pages 静态发布公钥**（§13），隧道不再参与校验，但代价是**密钥轮换后必须重新发布**，且生产形态必须换成 Cloud Auth 的真实 JWKS。
 4. **撤销是 TTL 语义**：没有即时撤销；禁用账户的 ≤300s 残留未消除（§6）。
 5. **`bash scripts/check.sh` 本机不可执行**：`C:\Windows\system32\bash.exe` 是 WSL 且 25s 内无响应（探测已记录），故以 `npm run check` 与 Ubuntu CI 为权威。这是环境限制，不是脚本缺陷。
 6. **测试命令结果**：`npm run check` exit 0（typecheck + unit + workerd integration + dry-run + benchmark + canary + profile），见 §10。
@@ -199,8 +199,8 @@ node "$env:TEMP\gln014-env\wrong-audience.mjs"           # N6 错误 audience（
 | 必需请求头 | `content-type: application/json`、`accept: application/json, text/event-stream`、`authorization: Bearer <token>` | 缺 `accept` 且服务端选择 SSE 时客户端要能解析 `text/event-stream` |
 | `aud`（令牌） | `mira:cloud-guanlan` | 精确匹配；不要用资源 URL 以外的值 |
 | `iss`（令牌） | `mira:cloud-auth` | 代码常量，**不是**环境变量；Pi 侧不要试图用 discovery 的 issuer 覆盖它 |
-| `CLOUD_AUTH_ISSUER`（部署侧） | `https://<current-host>`（HTTPS URL） | 仅用于 RFC 9728 发现；**填 `mira:cloud-auth` 会让 `/mcp` 返回 503** |
-| JWKS | `https://<current-host>/.well-known/jwks.json`，`kid=gln013-t23-1`、`EdDSA`/`Ed25519` | **由 Worker 侧（Cloudflare 出网）拉取，不需要本机代理**；本机自验才需 `HTTPS_PROXY`。隧道重连会换 host，`<current-host>` 以 `%TEMP%\gln013-t23\current-host.txt` 为准 |
+| `CLOUD_AUTH_ISSUER`（部署侧） | `https://mira-auth-jwks-test.pages.dev`（HTTPS URL） | 仅用于 RFC 9728 发现，**测试期占位**（真实授权服务器应为 Cloud Auth）；**填 `mira:cloud-auth` 会让 `/mcp` 返回 503** |
+| JWKS | `https://mira-auth-jwks-test.pages.dev/.well-known/jwks.json`，`kid=gln013-t23-1`、`EdDSA`/`Ed25519`、`cache-control: public, max-age=300` | **静态发布（§13）**，由 Worker 侧（Cloudflare 出网）拉取，不需要本机代理；本机自验才需 `HTTPS_PROXY`。隧道**不再**参与校验；密钥轮换后必须重新发布 |
 | 令牌现签 | `node "%TEMP%\gln013-t23\mint.mjs" "%TEMP%\gln013-t23" [guanlan.read] [guanlan.write]` | TTL **300s**：**每次调用前现签**，不要缓存到文件后隔几分钟再用；令牌只出现在本机受限临时文件里 |
 | 工具面 | 读：`guanlan_news_recent`、`guanlan_whoami`；写：`guanlan_news_decide` | 写工具需 `guanlan.write` scope，仅读令牌调用返回 `guanlan_decision_forbidden`（HTTP 200 + `isError`） |
 
@@ -215,9 +215,42 @@ Pi 侧接入时预期能观察到的失败形态（便于区分问题归属）�
 | 现象 | 含义 | 处置 |
 | --- | --- | --- |
 | `/mcp` 返回 **503** | 部署配置不合法（如 `CLOUD_AUTH_ISSUER` 不是 HTTPS URL） | 修 Worker 变量后重 deploy，不是令牌问题 |
-| `/mcp` 返回 **401** `invalid_token` | 令牌被拒：过期、`iss`/`aud` 不匹配、签名不可验证、JWKS 取不到 | 先查 `current-host.txt` 与 tunnel 是否活着，再查令牌 TTL |
+| `/mcp` 返回 **401** `invalid_token` | 令牌被拒：过期、`iss`/`aud` 不匹配、签名不可验证、JWKS 静态副本与当前密钥不一致 | 先确认 `/mcp` 用的 JWKS 地址可公开访问且内容是最新公钥（§13），再查令牌 TTL；**不要再怀疑隧道** |
 | 工具返回 `isError` + `guanlan_decision_forbidden` | 令牌缺 `guanlan.write` | 现签时显式带上 `guanlan.write` |
 | 工具返回 `guanlan_principal_unavailable` | 该账户尚无 Guanlan 空间行（未投递） | 需要 Cloud Auth 侧完成 `delivered` 投递 |
 | 工具返回 `guanlan_decision_version_conflict` | CAS 的 `expectedVersion` 过期 | 重新 `guanlan_news_recent` 读 `stateVersion` 再判 |
 
-> 环境生命周期：该 Worker 与 D1 保留到 t9 跑完；销毁前由 lead 明确通知，销毁命令见 `docs/engineering/gln-014-isolated-env.md` §6（Worker delete + D1 delete）。
+> 环境生命周期：该 Worker 与 D1 保留到 t9 跑完；销毁前由 lead 明确通知，销毁命令见 `docs/engineering/gln-014-isolated-env.md` §6（Worker delete + D1 delete + 静态 JWKS 清理）。
+
+## 13. 静态 JWKS：隔离环境的稳定性措施（2026-11-04）
+
+**动因**：此前 `CLOUD_AUTH_JWKS_URL` 指向 auth-dev 的 localhost.run 隧道，隧道每次重连换 host，Worker 就会因为「JWKS 取不到」而把**所有**令牌判 401 —— t10 期间实际踩了 3 次。这类 401 与令牌合同无关，却会被误读成「令牌/校验有问题」，对 t9 联调尤其有害。
+
+**做法**：把当前**公钥**静态发布到一个稳定地址，Worker 不再依赖隧道。
+
+| 项 | 值 |
+| --- | --- |
+| JWKS 静态地址（t9 用） | `https://mira-auth-jwks-test.pages.dev/.well-known/jwks.json`（另有 `/jwks.json` 同内容） |
+| 托管方式 | **Cloudflare Pages** 静态托管（项目 `mira-auth-jwks-test`），仓库外目录部署，只含 `jwks.json` / `health.json` / `_headers` |
+| 内容 | 仅公钥：`kid=gln013-t23-1`、`kty=OKP`、`crv=Ed25519`、`alg=EdDSA`、单 key、**无 `d`（无私钥）** |
+| 缓存头 | `cache-control: public, max-age=300`（由 Pages `_headers` 设定）、`content-type: application/json` |
+| Guanlan Worker 变量 | `CLOUD_AUTH_JWKS_URL=https://mira-auth-jwks-test.pages.dev/.well-known/jwks.json`；`CLOUD_AUTH_ISSUER=https://mira-auth-jwks-test.pages.dev`（**仅测试期元数据占位**，真实授权服务器以生产为准） |
+| 部署版本 | `8bfa761c-7bfb-43b4-bd4c-5ca5bf720501`（只改变量，未改代码、未动 D1） |
+| 真实令牌自检 | `initialize` 200、`tools/list` 200、`guanlan_whoami` 200（`consumerEqualsAccount:true`、scopes `[read,write]`）、`guanlan_news_recent` 200（`count=1`，只含自己的文章）、跨账户 `decide` 仍 `guanlan_decision_not_available` |
+
+**平台约束（重要，解释了为什么不是「另一个 Worker」）**：原计划用独立 Worker 提供 JWKS，实测**不可行** —— Cloudflare 拒绝同一 `*.workers.dev` 区域内的 Worker→Worker 子请求，返回 `404` + 正文 `error code: 1042`。用诊断路由 `/selftest` 复现（该次部署 version `c205fdb2…`）：
+
+```json
+{"results":[{"target":"https://mira-auth-jwks-test.dangjingtao.workers.dev/.well-known/jwks.json",
+             "status":404,"bytes":17,"preview":"error code: 1042\n"},
+            {"target":"https://mira-auth-jwks-test.dangjingtao.workers.dev/health",
+             "status":404,"bytes":17,"preview":"error code: 1042\n"}]}
+```
+
+因此改用 **Pages**（`*.pages.dev` 属不同区域，Worker 可正常抓取）。诊断 Worker `mira-auth-jwks-test` 保留为**平台约束的证据**，它不参与运行时链路，销毁清单里与其它资源一并删除。若坚持用 Worker 承载 JWKS，唯一可行路径是 Service Binding + 改 Guanlan 代码，本轮明确**不**采用（避免为测试稳定性改产品代码）。
+
+**边界（不得被误读）**：
+1. 这是**隔离测试环境的稳定性措施**，不是产品形态。生产形态必须使用**常驻 Cloud Auth 的真实 JWKS**（或其等价的受管发布），而不是人工静态化公钥。
+2. **公钥静态发布 ≠ 密钥托管**：私钥始终在 auth-dev 本机（签发实例内），这里只有公钥。静态化带来的代价是：**密钥轮换后必须重新发布**，否则 Worker 会 401（fail closed）。轮换时按「取新 JWKS → 覆盖 `jwks.json` → `wrangler pages deploy` → 冒烟 whoami」执行。
+3. 隧道**不再**是 Worker 的依赖，只保留供本机现签（`mint.mjs` 需要实例的签发端点）。隧道挂掉不再影响 `/mcp` 的令牌校验。
+4. 该 Pages 项目与诊断 Worker 均属**待销毁**资源（与 D1/Worker 同期清理）。
