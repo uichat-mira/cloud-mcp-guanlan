@@ -197,7 +197,7 @@ Worker 脚本共 14 个：13 个既有脚本的 `modified_on` 全部 ≤ `2026-1
 | G3 | **真实空间行** | **已满足**：测试账号经 GLN-012 真实投递 `pending → delivered`（attempts=2），D1 里 `accountId == consumerId` 的空间行存在，`/mcp` 不再返回 `guanlan_principal_unavailable` | auth-dev |
 | G4 | **已批准新闻源 / 真实内容** | **仍缺**：`poc_sources`/`poc_news` 只有 t10 用的 1 行合成 fixture；真实采集内容未验证 | 维护者批准源清单 + ingest 授权 |
 | G5 | 真实模型 / 企业微信通道 | 不属于本卡与 GLN-014 范围 | lead 统一排期 |
-| G6 | **错误 audience 负例** | **blocker**：非生产实例多次掉线，Shiyan audience 令牌未取到，资源服务侧 `aud` 拒绝目前只有单测覆盖 | auth-dev 实例稳定后补跑 |
+| G6 | **错误 audience 负例** | **已解除**：用 `aud=mira:cloud-shiyan` 的 Shiyan 令牌打 Guanlan `/mcp` → **401 `invalid_token`**（非 503），见 t10 验收记录 §5.2。注意签发侧 audience 常量是 `mira:cloud-shiyan`，`mira:shiyan` 会 400 | — |
 
 ## 8. 与 t10（GLN-014 L3 验收）的接口
 
