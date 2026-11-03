@@ -99,7 +99,7 @@ Cloud Auth 一侧（GLN-012）负责产生**投递意图**并受控投递；观�
 | `401` | `invalid_timestamp` | 头缺失/非数字/超出 ±300s | 否 |
 | `401` | `invalid_signature` | 头形状不符或 HMAC 校验失败（含错误 secret、被篡改 body） | 否 |
 | `400` | `invalid_request` | body 非 JSON 对象、`version !== 1`、`accountId` 不合规 | 否 |
-| `409` | `space_state_conflict` | 见 §5 的三种冲突状态 | 否 |
+| `409` | `space_state_conflict` | 见 §5 的三种冲突状态（真实不可自动恢复；运维处置见 §10） | 否 |
 | `500` | `registration_unavailable` | D1 故障 | 可能（由 D1 决定），可重试 |
 
 响应体只有 `{error: <code>}` 一个字段，不区分「账户不存在」与「签名正确但状态冲突」之外的信息，
@@ -137,3 +137,30 @@ Cloud Auth 一侧（GLN-012）负责产生**投递意图**并受控投递；观�
 - **不做**订阅变更工具面（属独立工作项建议，见 GLN-014 验收矩阵 §7）。
 - Cloud Auth 侧 `failed` 表示「本批未确认」，可能只是安排了重试；观澜的 `409` 会让该账户在 8 次预算内
   耗尽后进入终态 `failed`，需要管理员 `guanlan-retry`。这是刻意选择：宁可让运维显式确认，也不静默复活。
+
+## 10. 运维说明：看到 `409 space_state_conflict` 怎么办
+
+**裁决（维护者，2026-11-04）：保持 `409`，不改 `200 + registered:false`。**
+理由是 `409` 描述的是一个**真实且不可自动恢复**的状态（空间被拆除 / 注册后被删除）；
+静默返回 `200` 会让 Cloud Auth 把它记成「已投递」，从而掩盖数据丢失。让投递最终落到 `failed`
+把问题推到运维面前，是后果可见、可审计的选择。
+
+**处置流程（必须人工确认，不能直接重复 retry）：**
+
+1. `409` 不是瞬时错误，重试**不会**自愈：Cloud Auth 会在 8 次预算内持续失败后把该账号置为终态 `failed`。
+2. 先判定是两类中的哪一种（都需要运维访问隔离环境 D1）：
+   - 收据在、`guanlan_accounts` 行不在 → 该账号**注册后被删除**；
+   - `guanlan_accounts` 行在、`guanlan_consumers(account_id, consumer_id = account_id)` 行不在 → 空间被**拆除**。
+3. **先确认这是预期行为**（例如该账户确实已注销/被清理），再决定：
+   - 若确实应保持删除状态：不要 retry，也不要手工补行；让该账号停留在 `failed`，并在 Cloud Auth 侧记录原因。
+   - 若确属误删、需要恢复：先与用户/维护者确认归属，再重建空间（补行**必须同时**写
+     `guanlan_accounts` + `guanlan_consumers`，并让收据继续存在），然后才 `guanlan-retry`。
+4. **禁止**为了让重试通过而删除 `guanlan_registration_receipts` 行：收据是「这个账户曾经注册过」的唯一证据，
+   删掉它等于放弃「不复活已删除空间」的保护。
+5. 每次 409 的处置都应留下操作记录（谁、何时、为什么），因为静默复活比一次失败的投递危险得多。
+
+**为什么收据表故意没有外键**：如果 `guanlan_registration_receipts` 对 `guanlan_accounts` 加了
+`ON DELETE CASCADE`，那么「注册后被删除」这一状态会在删除账户的瞬间被抹掉，接收端就无法区分
+**从未注册** 与 **注册后被删除**，于是任何一次迟到的重投都会静默重建一个已被删除的账户。
+收据必须比账户活得更久，所以它独立存在（见 §5 状态表与 `migrations/0005_guanlan_registration_receipts.sql` 注释）。
+
