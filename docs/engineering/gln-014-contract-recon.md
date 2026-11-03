@@ -17,6 +17,8 @@
 | `npm ci --no-audit --no-fund` | 通过（`added 181 packages`） |
 | `npm run typecheck` | 通过（`tsc --noEmit`，exit 0） |
 | `node scripts/gln-014-contract-probe.mjs` | 通过，**18/18** 条契约期望成立（只读探针，见第 4 节） |
+| `node scripts/gln-014-token-fetch.mjs self-test` | 通过（PASS/PASS，exit 0）：合同令牌被真实验证器接受、缺 `consumer_id` 的令牌被拒 |
+| `node scripts/gln-014-token-fetch.mjs plan` / `verify` / `fetch` | 缺项 fail-closed（exit 2）；`fetch` 未获联网授权被拒（exit 4）。详见 [验收矩阵 §5](gln-014-acceptance-matrix.md) |
 | `bash scripts/check.sh` | **未执行**：本机未安装 Git Bash（`C:\Program Files\Git\bin\bash.exe` 不存在）；`C:\Windows\System32\bash.exe` 是 WSL 入口，探测挂起，已终止。Ubuntu CI 仍是该门禁的权威执行环境（`scripts/check.sh:11-18`） |
 | 真实 Cloud Auth 令牌 / 真实 `/mcp` 端点 | **未验证**，两者当前都不存在（第 6 节） |
 
@@ -175,6 +177,16 @@
 > 它只覆盖 Guanlan 资源服务**已经强制**的字段；不扩张 audience，不引入第三方 OAuth，
 > 不允许客户端自报 `consumer_id`（主体必须由 Cloud Auth 从已验证 Cloud Session 派生）。
 
+### 5.0 维护者裁决（2026-11-04，经 lead 转达）
+
+| # | 裁决 | 对本草案的影响 |
+| --- | --- | --- |
+| ① | `consumer_id` = **当前 Cloud Account id**（方案 A），由 Cloud Auth 从已验证、设备绑定的 Cloud Session 派生，不接受客户端自报 | §5.1 的 `consumer_id` 行按此收紧；观澜侧 provisioning 必须存在 `(account_id, account_id)` 行，见 §6 B4 与 [验收矩阵 G1](gln-014-acceptance-matrix.md) |
+| ② | 空间闸门前置：Cloud Auth 读 GLN-012 outbox，`delivered` 才签发；PR #130 未合并且 outbox 表不在 `dev` | 强化 §6 B4：没有 delivered 注册就不得有令牌 |
+| ③ | 撤销 = 短 TTL（≤300s）+ 签发时复核，**不引入 `jti`/吊销表** | 取代 §5.2 原来的 (a)/(b) 待裁选项；验收不得宣称「即时可撤销」 |
+| ④ | `scope` 受约束数组：至少 `guanlan.read`，写需 `guanlan.write`，服务端限定只作用于本人账本 | 与 §2.5 现有实现一致，无改动 |
+| ⑤ | `aud` 精确 `mira:cloud-guanlan`；`consumer_id` 固定 claim 名；`device_id` 保留且观澜忽略 | 与 §2.2/§2.4 现有实现一致，无改动 |
+
 ### 5.1 必需字段
 
 | 字段 | 精确要求 | 依据 |
@@ -182,7 +194,7 @@
 | `iss` | 字符串，**恰好** `mira:cloud-auth`（部署中立，不随环境变化） | `src/mcp/auth.ts:69-74`、`src/mcp/config.ts:23` |
 | `aud` | 字符串，**恰好** `mira:cloud-guanlan`（推荐）。也接受与 `/mcp` 资源 URL 完全相等的值，但服务名更稳定，建议固定用服务名 | `src/mcp/config.ts:24,93-96` |
 | `sub` | Cloud Account 标识，`1..128` 字符、无首尾空白；映射为 Guanlan `account_id` | `src/mcp/auth.ts:81,86`、`migrations/0003_guanlan_accounts.sql:5-7` |
-| `consumer_id` | **稳定消费者标识**（同一消费者跨设备/跨会话不变），`1..128` 字符、无首尾空白；**必须属于 `sub` 账户**；映射为 Guanlan `consumer_id` | `src/mcp/auth.ts:82-86`、`src/mcp/config.ts:105-106`、`migrations/0003_guanlan_accounts.sql:11-20` |
+| `consumer_id` | 按裁决①：**等于 Cloud Account id**（即 `consumer_id == sub`）。`1..128` 字符、无首尾空白；映射为 Guanlan `consumer_id`。跨设备/跨会话天然稳定，但「同一账户下多个消费者」在当前裁决下**不存在** | `src/mcp/auth.ts:82-86`、`src/mcp/config.ts:105-106`、`migrations/0003_guanlan_accounts.sql:11-20` |
 | `scope` | 至少 `["guanlan.read"]`；需要写回时必须**显式**包含 `"guanlan.write"`。数组形式（Cloud Auth 现行形状）与空格串都被接受；数组里出现非字符串会被整体拒绝 | `src/mcp/auth.ts:41-55`、`src/mcp/config.ts:10,18-21` |
 | `exp` | 数字，秒级；必须存在且未过期（容许 5s 时钟误差） | `src/mcp/auth.ts:73,74,85-86` |
 | `iat`/`nbf` | 数字、秒级；Guanlan 不单独校验，但请保持 `nbf <= iat` 且 `exp > nbf` | Cloud Auth 已校验（`.../signer.ts`、`.../service-credential.ts` `refineTemporalClaims`）；Guanlan 侧见 `src/mcp/auth.ts:68-75` |
@@ -193,10 +205,10 @@
 
 | 项目 | 建议/现状 | 依据 |
 | --- | --- | --- |
-| TTL | Cloud Auth 现行：默认 **300s**、上限 **600s**（`DEFAULT_SERVICE_CREDENTIAL_TTL_SECONDS` / `MAX_...`）。Guanlan **不设上限**，但建议沿用 ≤300s，因为资源侧无法撤销已签发令牌 | Cloud Auth `apps/api/src/service-credentials/signer.ts`；Guanlan 无 TTL 上限检查（`src/mcp/auth.ts:68-75`） |
-| 已签发令牌的撤销 | **当前无机制**：Cloud Auth 无 token revocation list / `jti`；Guanlan 只校验签名 + 有效期，没有撤销名单查询 | Cloud Auth `verifier.ts`（只查 iss/aud/iat/nbf/exp/signature/TTL）；Guanlan `src/mcp/auth.ts` |
-| 现有可控边界 | ① 短 TTL；② 设备/会话撤销（`DELETE /v1/devices/:deviceId`）只**阻断新签发**（`issueWithinActiveDeviceSession` 在同一 `BEGIN IMMEDIATE` 事务里检查会话/设备），**不能让已发出的令牌提前失效**；③ 账号禁用同理 | Cloud Auth `service.ts`（`issueWithinActiveDeviceSession`）、`docs/deployment.md` |
-| 结论（待维护者裁决） | 若 GLN-014 要验收「撤销」，只有两条正路：**(a)** 接受「撤销 = 停止续签 + 短 TTL 自然过期」并在验收里写明时效；**(b)** 在 Cloud Auth 增加可查询的撤销语义（例如账号/设备/消费者级 epoch 或 `jti` 拒绝表）并让 Guanlan 增加一次检查。**不能**用「签名有效」冒充「可撤销」（Issue #26 已明确禁止） | Issue #26 Verification 段 |
+| TTL | **裁决③：观澜令牌 TTL ≤ 300s**（Cloud Auth 现行默认 300s、上限 600s，`DEFAULT_SERVICE_CREDENTIAL_TTL_SECONDS` / `MAX_...`）。Guanlan 侧无上限检查，约束来自策略而非代码 | Cloud Auth `apps/api/src/service-credentials/signer.ts`；`src/mcp/auth.ts:68-75` |
+| 已签发令牌的撤销 | **裁决③：不引入 `jti`/吊销表**。已签发令牌只能靠短 TTL 自然过期；观澜不查撤销 | Cloud Auth `verifier.ts`；Guanlan `src/mcp/auth.ts` |
+| 现有可控边界 | ① 短 TTL（≤300s）；② 签发时复核空间 `delivered`（裁决②）与账号可用性；③ 设备/会话撤销（`DELETE /v1/devices/:deviceId`）只在 `issueWithinActiveDeviceSession` 的同一 `BEGIN IMMEDIATE` 事务里**阻断新签发**，不能让已发出令牌提前失效 | Cloud Auth `service.ts`、`docs/deployment.md` |
+| 结论（已裁决） | 验收只能声明：「停止续签后，已签发令牌在 ≤300s 内失效」；**不得**声明即时撤销。Guanlan 侧无任何撤销检查，不要新增 | 裁决③ 与 Issue #26 Verification 段 |
 
 ### 5.3 签发入口（Cloud Auth 现状，供联调对齐）
 
@@ -216,7 +228,7 @@
 2. 新增 guanlan claims 变体（`.strict()` 内）：在通用字段上**增加 `consumer_id`**，`scope` 至少 `guanlan.read`，**写 scope 必须独立**、不能因读到就自带写。
 3. 签发时 `consumer_id` 只能由服务端从已验证 Cloud Session / 设备-账号关系派生，**不接受请求体自报**（现行请求体只有 `{audience}`，保持这个最小面）。
 4. 无观澜空间 / 禁用账号 / 账号删除 → fail-closed（与 GLN-012 的状态联动），不能签发。
-5. 撤销语义按 §5.2 裁决落地，并在合同里写明「token 失效时延」的实测值。
+5. 撤销语义按**裁决③**：不加 `jti`/吊销表，令牌 TTL 强制 ≤300s，签发时复核空间与账号状态；验收只声明「停止续签后 ≤TTL 失效」。
 6. 若签发侧真按上述改动完成，Guanlan 侧**无需任何改动**即可验证（本探针已证明契约吻合）。
 
 ## 6. GLN-014 阻塞项（谁提供 / 哪个端点 / 缺什么）
@@ -226,22 +238,19 @@
 | B1 | **没有能通过 Guanlan 验证的令牌** | Cloud Auth `service-credential.ts` 的 audience/scope 枚举与 claims 无 `consumer_id`；本探针实测现行 Shiyan 凭证被拒 | `cloud-auth` GLN-013（Issue #129）。缺：guanlan audience/scope + `consumer_id` claim 的实现与测试 |
 | B2 | **没有跑 `/mcp` 的真实观澜端点** | `wrangler.jsonc:3-15`：`cloud-guanlan-poc-do-not-deploy`、`workers_dev:false`、D1 `database_id` 全 0；`src/app.ts:25-34` 只有 `/mcp` + metadata | 需要一个隔离（dev/test）部署：真实 `MCP_RESOURCE_URL`、`CLOUD_AUTH_ISSUER`、`CLOUD_AUTH_JWKS_URL`、`MCP_AUDIENCE` 四个 binding。缺：部署授权 + 绑定 + 账号 |
 | B3 | **没有已执行 `0003`/`0004` 的真实 D1** | GLN-003 Canary 只执行 `0001`/`0002` 且已关闭 Cron（`docs/engineering/gln-003-cloudflare-canary.md:4,20,127`）；`0003`/`0004` 只在本地 Miniflare 测试里跑过 | 需要一个执行过 4 个迁移的隔离 D1，且**不含**真实用户数据 |
-| B4 | **真实账户没有观澜空间行** | 注册链路 GLN-012 的 PR（`cloud-auth` #130）仍 open；`guanlan_accounts`/`guanlan_consumers` 只能由 provisioning 写入（`migrations/0003:4-20`） | `cloud-auth` GLN-012 合并 + 观测到真实注册成功；否则读写都会 `guanlan_principal_unavailable`（`src/mcp/service.ts:557-565`） |
+| B4 | **真实账户没有观澜空间行，且观澜侧没有供应者** | 注册链路 GLN-012 的 PR（`cloud-auth` #130）仍 open，其接收端明确未交付；`src/**` 对 `guanlan_accounts`/`guanlan_consumers` 只有 SELECT/COUNT，无任何 INSERT；`src/app.ts:21-38` 无接收路由 | 裁决①要求建 `(account_id, account_id)` 行 → 需要**新的 Guanlan 工作项**（注册接收 + HMAC + 幂等 upsert）。GLN-014 过渡期只能用 test-only seed。详见 [验收矩阵 §6.1](gln-014-acceptance-matrix.md) |
 | B5 | **Cloud Auth 无隔离环境** | 只有生产 `cloud-auth.tomzlab.cn`；`test` 非常驻；无 `dev`（`docs/deployment.md` §2.3） | 维护者指定：隔离测试窗口（test workflow）或本地 compose 实例 + 测试账号；**不得**拿生产做 GLN-014 验收 |
-| B6 | **撤销语义未裁决** | Cloud Auth 无撤销表；Guanlan 无撤销检查（见 §5.2） | 维护者裁决 (a)/(b)；选 (b) 则两边都要改 |
-| B7 | **订阅变更没有可调用面** | 仅领域 port，无 MCP 工具、无 HTTP 路由（`gln-011...md:4,110`、`src/app.ts:36-38`） | 若验收要求覆盖，另立工作项；GLN-014 不扩张 |
+| B6 | **撤销语义（已按裁决③关闭）** | 裁决③：短 TTL（≤300s）+ 签发复核，不引入 `jti`/吊销表 | 验收措辞必须限定为「≤TTL 内失效」；若未来要求即时撤销，需重新裁决 |
+| B7 | **订阅变更没有可调用面** | 仅领域 port，无 MCP 工具、无 HTTP 路由（`gln-011...md:4,110`、`src/app.ts:36-38`） | 另立工作项（见 [验收矩阵 §7](gln-014-acceptance-matrix.md)）；GLN-014 不扩张 |
 | B8 | **fixture 不能替代真实链路** | `tests/mcp-fixtures.ts:24-43` 的 `FIXTURE_TOKENS` 是测试凭证表，部署模块无法通过环境变量选中它（`src/mcp/auth.ts:102-121`、`src/mcp/runtime.ts:13-18`） | 验收必须用真实签发令牌；fixture 只证明拒绝/接受逻辑 |
 
 ## 7. 与 auth-dev（GLN-013）草案的交叉核对
 
-- 本文 §5 就是提交给 `cloud-auth` 侧的**资源侧要求摘要**，请通过 lead 转交 `auth-dev`。
-- **交叉核对状态：未验证（待回执）**。截至本文提交时，尚未取得 `auth-dev` 的令牌合同草案文本；
-  §5 只由 Guanlan 当前代码 + 本探针推导，不代表双方已确认。
-- 已知需要双方一致的三点（当前只有 Guanlan 侧事实）：
-  1. `consumer_id` 的**名字**与**派生来源**（本文按验证器默认 `consumer_id` 写；若改用别的 claim 名，必须同时给 `MCP_CONSUMER_CLAIM` 绑定，`config.ts:105-106`）；
-  2. 写权限是否用独立 scope `guanlan.write`（Guanlan 已实现工具级检查，`server.ts:203-213`）；
-  3. 撤销语义（§5.2 的 (a)/(b)）。
-- 任何一条与 `cloud-auth` 现有 `.strict()` claims 冲突时，**以跨仓库裁决为准，不在任一仓私自扩张**（组织 AGENTS §5/§8）。
+- 本文 §5 是提交给 `cloud-auth` 侧的**资源侧要求摘要**，已通过 lead 转交。
+- **交叉核对状态（2026-11-04 更新）：五条裁决已收到并经 §5.0 对齐**（`consumer_id == account id`、空间闸门前置、短 TTL 无吊销表、写 scope 独立、`aud` 精确 + `device_id` 忽略）。
+  仍待回执的是 auth-dev 的**实现细节**：claim 的具体字段名（裁决⑤固定为 `consumer_id`）、以及签发时复核 GLN-012 `delivered` 的具体接口形态。
+- 裁决落地后仍存在的跨仓分歧点只有一处：**观澜侧没有注册接收者/空间供应者**（B4/G1）。这属于 Guanlan 新工作项，不在 `cloud-auth` 侧扩张。
+- 任何与 `cloud-auth` 现有 `.strict()` claims 冲突时，**以跨仓库裁决为准，不在任一仓私自扩张**（组织 AGENTS §5/§8）。
 
 ## 8. 本文没有证明什么
 
