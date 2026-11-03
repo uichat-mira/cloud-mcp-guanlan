@@ -92,6 +92,8 @@ const privateRows = async db => ({
   interests: await count(db, "SELECT COUNT(*) AS n FROM guanlan_account_interests"),
   consumerInterests: await count(db, "SELECT COUNT(*) AS n FROM guanlan_consumer_interests"),
   ledger: await count(db, "SELECT COUNT(*) AS n FROM guanlan_consumer_news_states"),
+  sources: await count(db, "SELECT COUNT(*) AS n FROM poc_sources"),
+  news: await count(db, "SELECT COUNT(*) AS n FROM poc_news"),
 });
 
 const assertOnlyErrorCode = async (response, status, code) => {
@@ -116,7 +118,7 @@ test("GLN-015: a signed registration creates the account space and never touches
     assert.equal(after.deliveries, 1);
 
     assert.deepEqual(await privateRows(db), {
-      subscriptions: 0, consumerSubscriptions: 0, interests: 0, consumerInterests: 0, ledger: 0,
+      subscriptions: 0, consumerSubscriptions: 0, interests: 0, consumerInterests: 0, ledger: 0, sources: 0, news: 0,
     });
   });
 });
@@ -192,7 +194,7 @@ test("GLN-015: every rejected delivery leaves the database untouched", async () 
 
     assert.deepEqual(await state(db), zero);
     assert.deepEqual(await privateRows(db), {
-      subscriptions: 0, consumerSubscriptions: 0, interests: 0, consumerInterests: 0, ledger: 0,
+      subscriptions: 0, consumerSubscriptions: 0, interests: 0, consumerInterests: 0, ledger: 0, sources: 0, news: 0,
     });
   });
 });
@@ -215,6 +217,28 @@ test("GLN-015: a torn-down space is never recreated by a stale delivery", async 
     const after = await state(db);
     assert.equal(after.accounts, 1, "the existing account row is untouched");
     assert.equal(after.consumers, 0, "the removed consumer space must not come back");
+  });
+});
+
+test("GLN-015: a pre-seeded account row is completed, not refused", async () => {
+  await withWorker(async (mf, db) => {
+    // An account row that was created outside this path (test seed / operator)
+    // has no receipt, so nothing proves its space was ever delivered to. The
+    // first legitimate delivery completes it instead of refusing forever.
+    await db.prepare("INSERT INTO guanlan_accounts(account_id, created_at) VALUES (?, ?)")
+      .bind(ACCOUNT, "2026-11-01T00:00:00.000Z").run();
+    assert.equal((await state(db)).consumers, 0);
+
+    const response = await deliver(mf);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { accountId: ACCOUNT, registered: true });
+
+    const after = await state(db);
+    assert.equal(after.accounts, 1, "the existing account row is reused");
+    assert.equal(after.consumers, 1, "the missing consumer row is created");
+    assert.deepEqual(after.consumerIds, [ACCOUNT]);
+    assert.equal(after.receipts, 1);
+    assert.equal(after.deliveries, 1);
   });
 });
 

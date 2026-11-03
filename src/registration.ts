@@ -188,12 +188,13 @@ async function readSpaceState(db: D1Database, accountId: string): Promise<SpaceS
 /**
  * Decide what a delivery means for this account, then apply the minimal write.
  *
- * | account | consumer | receipt | meaning                                   | action |
- * | ------- | -------- | ------- | ----------------------------------------- | ------ |
- * | absent  | absent   | absent  | first registration                        | create |
- * | present | present  | any     | duplicate delivery                        | touch  |
- * | present | absent   | any     | space torn down by an operator            | refuse |
- * | absent  | absent   | present | account deleted after registration        | refuse |
+ * | account | consumer | receipt | meaning                                   | action   |
+ * | ------- | -------- | ------- | ----------------------------------------- | -------- |
+ * | absent  | absent   | absent  | first registration                        | create   |
+ * | present | present  | any     | duplicate delivery                        | touch    |
+ * | present | absent   | present | space torn down after a delivery          | refuse   |
+ * | present | absent   | absent  | account pre-created outside this path     | complete |
+ * | absent  | absent   | present | account deleted after registration        | refuse   |
  *
  * "absent + present" cannot happen (foreign key) and is treated as a conflict.
  * Every write is guarded by the same predicates inside one atomic batch, so a
@@ -206,7 +207,11 @@ export async function applyRegistration(
 ): Promise<RegistrationErrorCode | null> {
   const before = await readSpaceState(db, accountId);
 
-  const tornDown = before.account && !before.consumer;
+  // A consumer space that disappeared *after* a recorded delivery was torn down
+  // and must not be rebuilt. An account row without a consumer row and without a
+  // receipt was pre-created outside this path (seeded for tests or by an operator);
+  // completing that space on the first legitimate delivery is the intended repair.
+  const tornDown = before.account && !before.consumer && before.receipt;
   const deletedAfterDelivery = !before.account && before.receipt;
   const impossible = !before.account && before.consumer;
   if (tornDown || deletedAfterDelivery || impossible) return "space_state_conflict";
@@ -261,8 +266,15 @@ export async function handleRegistration(
 ): Promise<Response> {
   if (request.method !== "POST") return fail("method_not_allowed");
 
-  const secret = env.MIRA_GUANLAN_REGISTRATION_SECRET?.trim() ?? "";
-  if (secret.length < REGISTRATION_SECRET_MIN_LENGTH) return fail("registration_not_configured");
+  // The sender signs with its configured value byte for byte and never trims it,
+  // so trimming here would silently derive a different HMAC key: both sides look
+  // correctly configured (>= 32 chars) yet every delivery fails 401 until the
+  // account's retry budget is exhausted. A padded value is therefore treated as
+  // a configuration error and reported loudly (503) instead of as a bad signature.
+  const secret = env.MIRA_GUANLAN_REGISTRATION_SECRET ?? "";
+  if (secret !== secret.trim() || secret.length < REGISTRATION_SECRET_MIN_LENGTH) {
+    return fail("registration_not_configured");
+  }
 
   const verified = await verifyRegistrationRequest(request, secret, nowMs);
   if (!verified.ok) return fail(verified.code);

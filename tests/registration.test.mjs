@@ -74,10 +74,16 @@ test("GLN-015 receiver: an unusable secret closes the endpoint instead of openin
     { secret: "" },
     { secret: "too-short" },
     { secret: "x".repeat(REGISTRATION_SECRET_MIN_LENGTH - 1) },
+    // The sender signs with its configured value byte for byte and never trims it,
+    // so a padded secret would make both sides look configured while every
+    // signature failed. It must surface as a configuration error, not a 401.
+    { secret: `${SECRET} ` },
+    { secret: ` ${SECRET}` },
+    { secret: `${SECRET}\n` },
   ];
   for (const options of cases) {
     const response = await handleRegistration(request(), env(options), NOW);
-    assert.equal(response.status, 503);
+    assert.equal(response.status, 503, `secret ${JSON.stringify(options.secret)} must be refused`);
     assert.equal(await errorCode(response), "registration_not_configured");
   }
 });
