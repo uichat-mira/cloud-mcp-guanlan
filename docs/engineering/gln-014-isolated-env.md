@@ -45,8 +45,8 @@
 | --- | --- |
 | `DB` | 上表 D1 |
 | `MCP_RESOURCE_URL` | `https://cloud-guanlan-gln014-3c872be6.dangjingtao.workers.dev/mcp` |
-| `CLOUD_AUTH_ISSUER` | 初建时为占位 `https://cloud-auth.invalid/`；**t10 起改为非生产 Cloud Auth 的 HTTPS URL**（当前 `https://<current-host>`，见 §7 G1）。注意：它必须是 URL，不能填 `mira:cloud-auth`（那是 JWT 的 `iss` 常量，填进变量会让 `/mcp` 503） |
-| `CLOUD_AUTH_JWKS_URL` | `https://cloud-auth.invalid/.well-known/jwks.json`（**占位**，见 §7） |
+| `CLOUD_AUTH_ISSUER` | 初建时为占位 `https://cloud-auth.invalid/`；**t10 起改为可用的 HTTPS URL**，当前为 **`https://mira-auth-jwks-test.pages.dev`**（测试期元数据占位，见 §7 G1）。注意：它必须是 URL，不能填 `mira:cloud-auth`（那是 JWT 的 `iss` 常量，填进变量会让 `/mcp` 503） |
+| `CLOUD_AUTH_JWKS_URL` | 初建时为占位 `https://cloud-auth.invalid/.well-known/jwks.json`；当前为 **`https://mira-auth-jwks-test.pages.dev/.well-known/jwks.json`**（静态公钥，见 §7 G1 与 t10 验收记录 §13） |
 | `MCP_AUDIENCE` | `mira:cloud-guanlan` |
 | `MCP_REQUIRED_SCOPES` | 未设 → 默认 `guanlan.read` |
 | `MIRA_GUANLAN_REGISTRATION_SECRET` | 已用 `wrangler secret put` 注入（值只存在于维护者侧共享文件，入库与文档均不含明文） |
@@ -60,9 +60,9 @@
 | # | 用例 | 期望 | 实测 |
 | --- | --- | --- | --- |
 | S1 | `GET /health` | 200 | `200 {"service":"cloud-guanlan-poc","status":"ok","publicApi":false}` |
-| S2 | `GET /.well-known/oauth-protected-resource/mcp` | 200 | `200`，`resource`=本 Worker `/mcp`，`scopes_supported:["guanlan.read"]`，`authorization_servers:["https://cloud-auth.invalid/"]`，`bearer_methods_supported:["header"]` |
+| S2 | `GET /.well-known/oauth-protected-resource/mcp` | 200 | `200`，`resource`=本 Worker `/mcp`，`scopes_supported:["guanlan.read"]`，`bearer_methods_supported:["header"]`；`authorization_servers` 在建库时是占位 `https://cloud-auth.invalid/`，当前为 `https://mira-auth-jwks-test.pages.dev`（同一字段结构） |
 | S3 | `POST /mcp` 匿名 | 401 + `WWW-Authenticate` | `401`，`Bearer error="invalid_token", error_description="Missing Authorization header", scope="guanlan.read", resource_metadata="…/.well-known/oauth-protected-resource/mcp"` |
-| S4 | `POST /mcp` 垃圾 bearer | 401 | `401 {"error":"invalid_token","error_description":"invalid_token"}`（JWKS 为占位域名，fail closed） |
+| S4 | `POST /mcp` 垃圾 bearer | 401 | `401 {"error":"invalid_token","error_description":"invalid_token"}`（建库时 JWKS 为占位域名，fail closed；换成真实 JWKS 后该用例仍 401，见 t10 验收记录 N2） |
 | S5 | `GET /internal/unknown` | 404 | `404 {"error":"not_found"}` |
 | S6 | `POST /internal/guanlan-registrations` 首次 | 200 + 收据 | `200 {"accountId":"<synthetic>","registered":true}` |
 | S7 | 同上（重复投递） | 200、不重复建行 | `200`，D1 行数不变、`deliveries` 递增 |
@@ -86,11 +86,15 @@
 
 ## 5. 如何重建（可复制）
 
-> **前置（重要，F-30-1）**：`migrations/0005_guanlan_registration_receipts.sql` 与 `src/registration.ts` **目前只在未合并分支**
-> `feat/gln-015-registration-receiver`（PR #29，SHA `57c7b52`）上；`dev` 分支**没有**这两个文件，直接在 `dev` 上照抄本节会在
-> `d1 migrations apply` 阶段因缺 `0005` 而建不出收据表（注册端点会以 `500 registration_unavailable` fail closed）。
-> 二选一：① 先合并 PR #29；② 从该分支构建：`git worktree add ../gln-015 57c7b52`，在**那个** worktree 里跑 `npm ci && npm run build`，
-> 后续命令的 `.\dist\worker.mjs` 与 `.\migrations\*.sql` 都指该 worktree。本节记录的实测环境即用 ②。
+> **前置（重要，F-30-6 已更新）**：`migrations/0005_guanlan_registration_receipts.sql` 与 `src/registration.ts` **已随 PR #29 合入 `dev`**
+> （merge `aa1808c`，2026-11-03T17:59:13Z）。因此**直接以 `origin/dev` HEAD 为准**（本卡复核时为 `e3aefe0`）：
+> ```powershell
+> git -c http.proxy=http://127.0.0.1:1080 fetch origin dev
+> git cat-file -e origin/dev:migrations/0005_guanlan_registration_receipts.sql   # 存在即满足前置
+> git cat-file -e origin/dev:src/registration.ts
+> ```
+> 本节首次实测用的是当时未合并的分支 `feat/gln-015-registration-receiver`（`57c7b52`，现已落后 `dev` **10 个提交**）。
+> **照抄时必须从 `dev` HEAD 构建**，否则会构建到旧代码（可能缺后续修复）。
 
 前置：维护者凭证文件 `$env:USERPROFILE\.mira-secrets\cloudflare.env`（`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`），
 以及共享注册密钥文件 `$env:USERPROFILE\.mira-secrets\guanlan-registration.env`。
@@ -104,8 +108,8 @@ $env:CLOUDFLARE_ACCOUNT_ID = [regex]::Match($raw,'(?m)^\s*CLOUDFLARE_ACCOUNT_ID\
 $reg = [IO.File]::ReadAllText("$env:USERPROFILE\.mira-secrets\guanlan-registration.env")
 $env:MIRA_GUANLAN_REGISTRATION_SECRET = [regex]::Match($reg,'(?m)^MIRA_GUANLAN_REGISTRATION_SECRET=(.+)$').Groups[1].Value.Trim()
 
-# 1) 构建（在含 0005/registration.ts 的 worktree 内）
-cd <cloud-mcp-guanlan worktree at 57c7b52>; npm ci; npm run build
+# 1) 构建（worktree 处于 origin/dev HEAD；含 0005 与 registration.ts）
+cd <cloud-mcp-guanlan worktree at origin/dev HEAD>; git switch --detach origin/dev; npm ci; npm run build
 
 # 2) 建独立 D1（非生产）
 $suffix = -join ((1..8) | % { '{0:x}' -f (Get-Random -Minimum 0 -Maximum 16) })
@@ -141,19 +145,26 @@ $env:MIRA_GUANLAN_REGISTRATION_SECRET | .\node_modules\.bin\wrangler.cmd secret 
   ],
   "vars": {
     "MCP_RESOURCE_URL": "https://cloud-guanlan-gln014-<SUFFIX>.dangjingtao.workers.dev/mcp",
-    "CLOUD_AUTH_ISSUER": "https://cloud-auth.invalid/",
-    "CLOUD_AUTH_JWKS_URL": "https://cloud-auth.invalid/.well-known/jwks.json",
+    "CLOUD_AUTH_ISSUER": "https://mira-auth-jwks-test.pages.dev",
+    "CLOUD_AUTH_JWKS_URL": "https://mira-auth-jwks-test.pages.dev/.well-known/jwks.json",
     "MCP_AUDIENCE": "mira:cloud-guanlan"
   }
 }
 ```
 
 > `migrations_dir` 在 deploy 时会被 wrangler 标为未知顶级字段（仅迁移命令需要），可安全忽略。
+>
+> **JWKS 用现成值即可**（`https://mira-auth-jwks-test.pages.dev/.well-known/jwks.json`，仅公钥、`max-age=300`）。
+> 不要照抄初建时的占位域名 `cloud-auth.invalid` —— 那样 `/mcp` 会因 JWKS 取不到而对**所有**真实令牌 401（fail closed），
+> 这正是 F-30-7 指出的旧文档矛盾。该 JWKS 是**测试期措施**（见 §7 G1），不是产品形态。
 
 ## 6. 如何销毁
 
-需要删除的资源共 **4 个**：**Worker** `cloud-guanlan-gln014-3c872be6`（连同 secret 绑定）、**D1** `cloud-guanlan-gln014-3c872be6`、
-**静态 JWKS**（Pages 项目 `mira-auth-jwks-test`）、以及为该场景创建的诊断 Worker `mira-auth-jwks-test`（不参与运行链路，仅保存平台约束证据）。
+需要删除的资源共 **3 个**：**Worker** `cloud-guanlan-gln014-3c872be6`（连同 secret 绑定）、**D1** `cloud-guanlan-gln014-3c872be6`、
+**静态 JWKS**（Cloudflare Pages 项目 `mira-auth-jwks-test`）。
+> 命名说明（F-30-9）：为验证「Worker 能否承载 JWKS」曾临时建过**同名**诊断 Worker `mira-auth-jwks-test`（平台返回 `error code: 1042`，
+> 结论与证据已固化在 t10 验收记录 §13）。该 Worker **已于 2026-11-04 删除**，因此不存在与 Pages 项目同名的资源歧义；
+> 销毁清单里也不再包含它。
 下面整段自包含，可直接复制执行：
 
 ```powershell
@@ -165,26 +176,35 @@ $tmp  = "$env:LOCALAPPDATA\Temp\gln014-env"
 $name = if (Test-Path "$tmp\env-name.txt") { (Get-Content "$tmp\env-name.txt" -Raw).Trim() } else { "cloud-guanlan-gln014-3c872be6" }
 
 cd <含 wrangler 的 cloud-mcp-guanlan worktree>
-# 1) 删 Guanlan Worker（--yes 跳过交互确认；secret 绑定随 Worker 一起消失）
-.\node_modules\.bin\wrangler.cmd delete --config "$tmp\wrangler.jsonc" --yes
-# 2) 删 D1（不可恢复）
+# 1) 删 Guanlan Worker（wrangler 4.156 的 delete 只有 --force / --dry-run，**没有 --yes**）
+.\node_modules\.bin\wrangler.cmd delete --config "$tmp\wrangler.jsonc" --force
+# 2) 删 D1（不可恢复；此子命令用 --skip-confirmation）
 .\node_modules\.bin\wrangler.cmd d1 delete $name --skip-confirmation
-# 3) 删静态 JWKS（Pages 项目；公钥文件随项目一起消失）
+# 3) 删静态 JWKS（Pages 项目用 --yes；公钥文件随项目一起消失）
 .\node_modules\.bin\wrangler.cmd pages project delete mira-auth-jwks-test --yes
-# 4) 删诊断 Worker（可选；若还想保留 1042 证据就先跳过）
-.\node_modules\.bin\wrangler.cmd delete --config "$tmp\jwks-worker\wrangler.jsonc" --yes
-# 5) 清理仓库外临时配置与产物（内含 D1 UUID、静态 JWKS 副本）
+# 4) 清理仓库外临时配置与产物（内含 D1 UUID、静态 JWKS 副本）
 Remove-Item -Recurse -Force $tmp
 ```
+
+> 三个子命令的确认参数**各不相同**，照抄时最容易在这里失败（F-30-5）：`delete` → `--force`；`d1 delete` → `--skip-confirmation`；`pages project delete` → `--yes`。
 
 - 删除 D1 会一并丢弃所有空间行与收据，不可恢复；销毁前确认已无验证依赖（**t9 未跑完前不要销毁**）。
 - 账号下另有 `cloud-guanlan-gln003-canary`、`mira-shiyan` 两个库与既有 Worker，**都不属于本环境**，销毁时不要对它们执行任何删除命令。
 - 若只销毁 JWKS（密钥轮换或不再需要稳定性措施）：先删 Pages 项目，**再**把 Guanlan Worker 的 `CLOUD_AUTH_JWKS_URL` 改回可用地址，否则 `/mcp` 会因 JWKS 取不到而全 401。
 
-### 6.1 「本卡未改变既有资源」的可复核快照（F-30-2）
+### 6.1 「未改变既有资源」的可判定口径与快照（F-30-2 / F-30-10）
 
-本卡执行过的**变更类**命令只有：`d1 create`（新库）、`d1 migrations apply`（仅对新库）、`secret put`（仅对新 Worker）、`deploy`（仅对新 Worker）、一次 `d1 execute` 写入 t10 用的合成 fixture 行，以及 2026-11-04 为静态 JWKS 新建的**新资源**（`pages project create mira-auth-jwks-test` + `pages deploy`，和诊断 Worker `mira-auth-jwks-test` 的 `deploy`）。
-**没有对任何既有资源执行变更命令**（无 delete / rename / 权限修改）。以下是事后只读快照（`wrangler d1 list` 与 Workers API `GET /accounts/<已脱敏>/workers/scripts`，2026-11-04 采集；静态 JWKS 之前采集，故 Worker 数为 14，现为 15）：
+本卡执行过的**变更类**命令只有：`d1 create`（新库）、`d1 migrations apply`（仅对新库）、`secret put`（仅对新 Worker）、`deploy`（仅对新 Worker）、一次 `d1 execute` 写入 t10 用的合成 fixture 行，以及 2026-11-04 为静态 JWKS 新建的**新资源**（`pages project create mira-auth-jwks-test` + `pages deploy`，和当时用于验证 1042 的诊断 Worker `mira-auth-jwks-test`；后者已于 2026-11-04 删除）。
+
+**可判定口径**（替代模糊的「未碰生产」）：本卡不存在任何以既有资源名为目标的写命令。可用两条机械判据复核：
+
+1. **命令侧**：所有变更命令都显式带 `--config "$tmp\…jsonc"`（目标名只能是 `cloud-guanlan-gln014-<suffix>`）或显式新资源名（`mira-auth-jwks-test`）。对既有资源执行过的命令**只有只读列举**：`wrangler d1 list`、`wrangler deployments list`、Workers API 的 `GET /accounts/<acct>/workers/scripts`、`GET …/settings`。
+2. **资源侧**：下表快照中，既有库/Worker 的 `created_at` 均早于本卡执行时间（2026-11-04），而本卡新建的两个库/Worker 的 `created_at` 落在本卡时间窗内 —— 若曾对既有资源做过 rename/delete，它们的 `created_at`/存在性会变化。
+
+**采集方式与脱敏（F-30-10）**：
+- 原始命令：`wrangler d1 list --json`（字段 `name`/`uuid`/`created_at`/`num_tables`）与 Workers API `GET /accounts/<acct>/workers/scripts`（字段 `id`/`created_on`）。
+- 脱敏规则：Cloudflare account id → `<已脱敏>`；D1/Worker 的 uuid 一律不入库（只保留本卡自建对象的库名与 `created_at`，因为它们已是公开可见的资源名）；不含令牌、密钥、用户标识。
+- 可复核性：上述两条命令为只读，维护者可在同一账号重跑并比对 `created_at` 与资源名集合。
 
 | D1 库 | `created_at`（UTC） | 归属 |
 | --- | --- | --- |
@@ -193,12 +213,13 @@ Remove-Item -Recurse -Force $tmp
 | `mira-shiyan` | 2026-08-31T01:23:39Z | 既有，未改 |
 
 Worker 脚本共 14 个：13 个既有脚本的 `modified_on` 全部 ≤ `2026-11-03T14:49:04Z`（早于本卡首次 deploy），第 14 个是本卡创建的同名 Worker，`modified_on = 2026-11-03T17:54:03Z`。
+（2026-11-04 曾临时部署同名诊断 Worker 验证 Worker→Worker 子请求，`error code: 1042` 证据采集后已删除；因此当前脚本数仍为 **14**。）
 
 ## 7. 缺口状态（2026-11-04 更新）
 
 | # | 缺口 | 当前状态 | 解除方 |
 | --- | --- | --- | --- |
-| G1 | **非生产 Cloud Auth 的 JWKS 可达性** | **已稳定**：2026-11-04 起 JWKS 以**公钥静态发布**在 Cloudflare Pages（`https://mira-auth-jwks-test.pages.dev/.well-known/jwks.json`，`max-age=300`），Worker 不再依赖隧道；真实令牌已被接受（t10 验收记录 §13）。边界：这是隔离测试环境的稳定性措施，生产须用 Cloud Auth 真实 JWKS；公钥静态发布 ≠ 密钥托管（私钥仍在 auth-dev 本机），密钥轮换后必须重新发布 | — |
+| G1 | **非生产 Cloud Auth 的 JWKS 可达性** | **已稳定（测试期措施）**：2026-11-04 起 JWKS 以**公钥静态发布**在 Cloudflare Pages（`https://mira-auth-jwks-test.pages.dev/.well-known/jwks.json`，`max-age=300`），Worker 不再依赖隧道；真实令牌已被接受（t10 验收记录 §13）。**⚠️ 这是隔离测试环境的稳定性措施，不是产品形态**：生产必须使用常驻 Cloud Auth 的真实 JWKS；公钥静态发布 ≠ 密钥托管（私钥仍在 auth-dev 本机），密钥轮换后必须重新发布，否则 `/mcp` 全 401（fail closed） | — |
 | G2 | **测试账号 + 设备绑定 Cloud Session** | **已满足**（t23）：`127.0.0.1:8788` 实例 + 设备绑定会话 + `POST /v1/service-credentials` 现签（TTL 300s） | auth-dev |
 | G3 | **真实空间行** | **已满足**：测试账号经 GLN-012 真实投递 `pending → delivered`（attempts=2），D1 里 `accountId == consumerId` 的空间行存在，`/mcp` 不再返回 `guanlan_principal_unavailable` | auth-dev |
 | G4 | **已批准新闻源 / 真实内容** | **仍缺**：`poc_sources`/`poc_news` 只有 t10 用的 1 行合成 fixture；真实采集内容未验证 | 维护者批准源清单 + ingest 授权 |
@@ -208,6 +229,6 @@ Worker 脚本共 14 个：13 个既有脚本的 `modified_on` 全部 ≤ `2026-1
 ## 8. 与 t10（GLN-014 L3 验收）的接口
 
 1. 把 `…/internal/guanlan-registrations` 交给 auth-dev 配置为 Cloud Auth 的 `MIRA_GUANLAN_REGISTRATION_URL`（必须 https）。
-2. G1 解除后，用真实的 `CLOUD_AUTH_ISSUER` / `CLOUD_AUTH_JWKS_URL` 重新 `wrangler deploy`（只需改变量，不必重建 D1）。
+2. G1 已按测试期方式满足（静态 JWKS，见 §7）；**生产化时**需把 `CLOUD_AUTH_ISSUER` / `CLOUD_AUTH_JWKS_URL` 换成真实授权服务器的地址后重新 `wrangler deploy`（只需改变量，不必重建 D1）。
 3. 用真实令牌 `POST /mcp`（`initialize` → 只读工具），沿 GLN-014 验收矩阵的 N/P 用例逐项取证；此时 `guanlan_principal_unavailable` 应不再出现（G3 已满足）。
 4. 全程禁止指向生产 Cloud Auth 或生产 D1/Worker。
