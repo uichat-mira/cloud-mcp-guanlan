@@ -10,7 +10,7 @@
 | 组件 | 事实 |
 | --- | --- |
 | 资源服务 | `https://cloud-guanlan-gln014-3c872be6.dangjingtao.workers.dev`（`workers_dev: true`，`triggers.crons: []`） |
-| 部署版本 | `dbf9ae4a-9495-4176-b2c8-ab137afe07d5`（§3/§4 主链路证据为 `752ae9d7-…`；§5.2 的 N6/N7 为 `dbf9ae4a-…`，两次 deploy 之间**只改 JWKS/issuer 变量**，未改代码） |
+| 部署版本 | `752ae9d7-…`（§3/§4 主链路）、`dbf9ae4a-…`（§5.2 N6/N7）、`2958d284-cd98-4a1a-b12d-b258ec1ac31c`（JWKS 隧道再次换址后按新 host 重 deploy，用于给 t9 保留可用环境；重 deploy 后 `initialize`/`tools/list`/`whoami`/`news_recent` 均 200，决策账本仍 `version=2`、`decided_at` 未变）。三次 deploy 之间**只改 JWKS/issuer 变量**，未改代码 |
 | D1 | `cloud-guanlan-gln014-3c872be6`，迁移 0001..0005 |
 | Cloud Auth（非生产） | `127.0.0.1:8788`（auth-dev t23 实例），签发 `POST /v1/service-credentials` |
 | JWKS | `https://<current-host>/.well-known/jwks.json`（localhost.run 临时隧道；单 key `kid=gln013-t23-1`、`kty=OKP`/`Ed25519`/`EdDSA`） |
