@@ -1,15 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { Miniflare } from "miniflare";
 
 // GLN-005 / GLN-007: exercise actual workerd/D1, never an in-memory Node SQLite mock.
-const MIGRATIONS = [
-  "migrations/0001_poc.sql",
-  "migrations/0002_source_leases.sql",
-  "migrations/0003_guanlan_accounts.sql",
-  "migrations/0004_consumer_news_state.sql",
-];
+// The set is derived from disk on purpose: a hand-maintained list silently stops
+// covering new migrations (0005 was exactly that gap before external review).
+const MIGRATIONS = (await readdir("migrations"))
+  .filter(name => name.endsWith(".sql"))
+  .sort()
+  .map(name => `migrations/${name}`);
+
+test("GLN-015: the applied migration set is every migration on disk, in sequence", () => {
+  assert.ok(MIGRATIONS.length >= 5, `expected at least 5 migrations, got ${MIGRATIONS.length}`);
+  assert.equal(MIGRATIONS[0], "migrations/0001_poc.sql");
+  const numbers = MIGRATIONS.map(path => Number.parseInt(path.slice("migrations/".length), 10));
+  numbers.forEach((number, index) => {
+    assert.equal(number, index + 1, `migration ${MIGRATIONS[index]} is out of sequence`);
+  });
+});
 const stamp = "2026-11-01T00:00:00.000Z";
 
 async function withD1(fn) {

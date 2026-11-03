@@ -6,8 +6,9 @@ import {
   type McpRuntimeOptions,
   type McpRuntimeResult,
 } from "./mcp/runtime";
+import { handleRegistration, REGISTRATION_PATH, type RegistrationEnv } from "./registration";
 
-export type GuanlanEnv = PocEnv & McpEnv;
+export type GuanlanEnv = PocEnv & McpEnv & RegistrationEnv;
 export type McpRuntimeResolver = (env: GuanlanEnv) => McpRuntimeResult;
 
 export function createApp(options: {
@@ -19,6 +20,11 @@ export function createApp(options: {
   const app = new Hono<{ Bindings: GuanlanEnv }>();
 
   app.get("/health", c => c.json({ service: "cloud-guanlan-poc", status: "ok", publicApi: false }));
+
+  // Cloud Auth → Guanlan account-space registration (GLN-015). HMAC-authenticated
+  // service traffic only: it is not part of the agent-facing MCP surface and
+  // grants no access to subscriptions, interests or news state.
+  app.all(REGISTRATION_PATH, c => handleRegistration(c.req.raw, c.env));
 
   // The only agent-facing HTTP surface. Unconfigured trust is a closed door,
   // not an anonymous fallback.
