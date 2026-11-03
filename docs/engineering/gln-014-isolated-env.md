@@ -3,6 +3,7 @@
 > 工作项：[t18 · 隔离非生产 Guanlan 环境供给]，关联 Issue [#26 `[GLN-014]`](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/26)
 > 状态：**已创建并冒烟通过**（2026-11-04）；仅非生产，生产资源未触碰。
 > 该环境服务于 GLN-013/GLN-014 的真实链路验证，不承担生产职责。
+> **销毁方式**：`wrangler delete --config <仓库外配置>`（删 Worker，含 secret 绑定）+ `wrangler d1 delete cloud-guanlan-gln014-<后缀> --skip-confirmation`（删 D1，不可恢复），详见 §6。
 
 ## 1. 端点（真实可达）
 
@@ -144,6 +145,8 @@ $env:MIRA_GUANLAN_REGISTRATION_SECRET | .\node_modules\.bin\wrangler.cmd secret 
 > `migrations_dir` 在 deploy 时会被 wrangler 标为未知顶级字段（仅迁移命令需要），可安全忽略。
 
 ## 6. 如何销毁
+
+需要删除的资源只有两个：**Worker**（`cloud-guanlan-gln014-3c872be6`，连同其 secret 绑定）与 **D1**（`cloud-guanlan-gln014-3c872be6`）。
 
 ```powershell
 # 先在同一个 pwsh 调用里注入凭证（同 §5 第 0 步）
