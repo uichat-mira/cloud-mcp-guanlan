@@ -39,6 +39,16 @@ export const guanlanConsumers = sqliteTable("guanlan_consumers", {
   index("idx_guanlan_consumers_account").on(t.accountId),
 ]);
 
+// GLN-015: delivery bookkeeping for the Cloud Auth registration receiver.
+// Deliberately NO foreign key: the receipt is what lets the receiver recognise
+// "registered before, then deleted" and refuse to resurrect that space.
+export const guanlanRegistrationReceipts = sqliteTable("guanlan_registration_receipts", {
+  accountId: text("account_id").primaryKey(),
+  firstDeliveredAt: text("first_delivered_at").notNull(),
+  lastDeliveredAt: text("last_delivered_at").notNull(),
+  deliveries: integer("deliveries").notNull().default(1),
+});
+
 export const guanlanAccountSubscriptions = sqliteTable("guanlan_account_subscriptions", {
   accountId: text("account_id").notNull().references(() => guanlanAccounts.accountId, { onDelete: "cascade" }),
   sourceId: text("source_id").notNull().references(() => pocSources.id, { onDelete: "restrict" }),
