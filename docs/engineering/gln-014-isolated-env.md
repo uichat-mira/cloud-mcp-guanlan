@@ -152,7 +152,8 @@ $env:MIRA_GUANLAN_REGISTRATION_SECRET | .\node_modules\.bin\wrangler.cmd secret 
 
 ## 6. 如何销毁
 
-需要删除的资源只有两个：**Worker**（`cloud-guanlan-gln014-3c872be6`，连同其 secret 绑定）与 **D1**（`cloud-guanlan-gln014-3c872be6`）。
+需要删除的资源共 **4 个**：**Worker** `cloud-guanlan-gln014-3c872be6`（连同 secret 绑定）、**D1** `cloud-guanlan-gln014-3c872be6`、
+**静态 JWKS**（Pages 项目 `mira-auth-jwks-test`）、以及为该场景创建的诊断 Worker `mira-auth-jwks-test`（不参与运行链路，仅保存平台约束证据）。
 下面整段自包含，可直接复制执行：
 
 ```powershell
@@ -164,21 +165,26 @@ $tmp  = "$env:LOCALAPPDATA\Temp\gln014-env"
 $name = if (Test-Path "$tmp\env-name.txt") { (Get-Content "$tmp\env-name.txt" -Raw).Trim() } else { "cloud-guanlan-gln014-3c872be6" }
 
 cd <含 wrangler 的 cloud-mcp-guanlan worktree>
-# 1) 删 Worker（--yes 跳过交互确认；secret 绑定随 Worker 一起消失）
+# 1) 删 Guanlan Worker（--yes 跳过交互确认；secret 绑定随 Worker 一起消失）
 .\node_modules\.bin\wrangler.cmd delete --config "$tmp\wrangler.jsonc" --yes
 # 2) 删 D1（不可恢复）
 .\node_modules\.bin\wrangler.cmd d1 delete $name --skip-confirmation
-# 3) 清理仓库外临时配置与产物（内含 D1 UUID）
+# 3) 删静态 JWKS（Pages 项目；公钥文件随项目一起消失）
+.\node_modules\.bin\wrangler.cmd pages project delete mira-auth-jwks-test --yes
+# 4) 删诊断 Worker（可选；若还想保留 1042 证据就先跳过）
+.\node_modules\.bin\wrangler.cmd delete --config "$tmp\jwks-worker\wrangler.jsonc" --yes
+# 5) 清理仓库外临时配置与产物（内含 D1 UUID、静态 JWKS 副本）
 Remove-Item -Recurse -Force $tmp
 ```
 
 - 删除 D1 会一并丢弃所有空间行与收据，不可恢复；销毁前确认已无验证依赖（**t9 未跑完前不要销毁**）。
-- 账号下另有 `cloud-guanlan-gln003-canary`、`mira-shiyan` 两个库与 13 个既有 Worker，**都不属于本环境**，销毁时不要对它们执行任何删除命令。
+- 账号下另有 `cloud-guanlan-gln003-canary`、`mira-shiyan` 两个库与既有 Worker，**都不属于本环境**，销毁时不要对它们执行任何删除命令。
+- 若只销毁 JWKS（密钥轮换或不再需要稳定性措施）：先删 Pages 项目，**再**把 Guanlan Worker 的 `CLOUD_AUTH_JWKS_URL` 改回可用地址，否则 `/mcp` 会因 JWKS 取不到而全 401。
 
 ### 6.1 「本卡未改变既有资源」的可复核快照（F-30-2）
 
-本卡执行过的**变更类**命令只有：`d1 create`（新库）、`d1 migrations apply`（仅对新库）、`secret put`（仅对新 Worker）、`deploy`（仅对新 Worker），以及一次 `d1 execute` 写入了 t10 用的合成 fixture 行。
-**没有对任何既有资源执行变更命令**（无 delete / rename / 权限修改）。以下是事后只读快照（`wrangler d1 list` 与 Workers API `GET /accounts/<已脱敏>/workers/scripts`，2026-11-04 采集）：
+本卡执行过的**变更类**命令只有：`d1 create`（新库）、`d1 migrations apply`（仅对新库）、`secret put`（仅对新 Worker）、`deploy`（仅对新 Worker）、一次 `d1 execute` 写入 t10 用的合成 fixture 行，以及 2026-11-04 为静态 JWKS 新建的**新资源**（`pages project create mira-auth-jwks-test` + `pages deploy`，和诊断 Worker `mira-auth-jwks-test` 的 `deploy`）。
+**没有对任何既有资源执行变更命令**（无 delete / rename / 权限修改）。以下是事后只读快照（`wrangler d1 list` 与 Workers API `GET /accounts/<已脱敏>/workers/scripts`，2026-11-04 采集；静态 JWKS 之前采集，故 Worker 数为 14，现为 15）：
 
 | D1 库 | `created_at`（UTC） | 归属 |
 | --- | --- | --- |
@@ -192,7 +198,7 @@ Worker 脚本共 14 个：13 个既有脚本的 `modified_on` 全部 ≤ `2026-1
 
 | # | 缺口 | 当前状态 | 解除方 |
 | --- | --- | --- | --- |
-| G1 | **非生产 Cloud Auth 实例**（公网可达 JWKS） | **已临时满足**：JWKS 指向 auth-dev t23 实例的 localhost.run 隧道（`CLOUD_AUTH_JWKS_URL=https://<current-host>/.well-known/jwks.json`，`kid=gln013-t23-1`），真实令牌已被接受（见 t10 验收记录）。仍属**临时设施**：隧道重连换 host，换址期间 `/mcp` 全部 401（fail closed） | auth-dev；长期需常驻非生产入口（禁止指向生产 `cloud-auth.tomzlab.cn`） |
+| G1 | **非生产 Cloud Auth 的 JWKS 可达性** | **已稳定**：2026-11-04 起 JWKS 以**公钥静态发布**在 Cloudflare Pages（`https://mira-auth-jwks-test.pages.dev/.well-known/jwks.json`，`max-age=300`），Worker 不再依赖隧道；真实令牌已被接受（t10 验收记录 §13）。边界：这是隔离测试环境的稳定性措施，生产须用 Cloud Auth 真实 JWKS；公钥静态发布 ≠ 密钥托管（私钥仍在 auth-dev 本机），密钥轮换后必须重新发布 | — |
 | G2 | **测试账号 + 设备绑定 Cloud Session** | **已满足**（t23）：`127.0.0.1:8788` 实例 + 设备绑定会话 + `POST /v1/service-credentials` 现签（TTL 300s） | auth-dev |
 | G3 | **真实空间行** | **已满足**：测试账号经 GLN-012 真实投递 `pending → delivered`（attempts=2），D1 里 `accountId == consumerId` 的空间行存在，`/mcp` 不再返回 `guanlan_principal_unavailable` | auth-dev |
 | G4 | **已批准新闻源 / 真实内容** | **仍缺**：`poc_sources`/`poc_news` 只有 t10 用的 1 行合成 fixture；真实采集内容未验证 | 维护者批准源清单 + ingest 授权 |
