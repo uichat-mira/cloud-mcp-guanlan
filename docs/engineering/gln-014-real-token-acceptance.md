@@ -204,6 +204,12 @@ node "$env:TEMP\gln014-env\wrong-audience.mjs"           # N6 错误 audience（
 | 令牌现签 | `node "%TEMP%\gln013-t23\mint.mjs" "%TEMP%\gln013-t23" [guanlan.read] [guanlan.write]` | TTL **300s**：**每次调用前现签**，不要缓存到文件后隔几分钟再用；令牌只出现在本机受限临时文件里 |
 | 工具面 | 读：`guanlan_news_recent`、`guanlan_whoami`；写：`guanlan_news_decide` | 写工具需 `guanlan.write` scope，仅读令牌调用返回 `guanlan_decision_forbidden`（HTTP 200 + `isError`） |
 
+> **关于「令牌现签」的定位（务必按此理解）**：上面这条现签命令是 **V1 单租户委托下的临时验证形态**，只用于 L3 联调证明合同与校验成立，
+> **不是目标架构**，也不是 Pi 侧应长期采用的做法。手工现签意味着人（或脚本）持有签发凭据并缓存令牌，放在产品里就等于把凭据管理、轮换、
+> 撤销都推给调用方。目标形态是**服务侧按需签发**：Pi 以自身服务身份换取**短 TTL** 的 Guanlan 令牌（TTL 由签发方决定，客户端不做长期缓存，
+> 过期即重取），并保留后续补 `jti` / 撤销表的能力。t9 用现签只是让联调不依赖尚未实现的自动签发链路；这条差别必须写进最终报告，
+> 否则读者会误以为「每次调用前手工 mint」是设计意图。
+
 Pi 侧接入时预期能观察到的失败形态（便于区分问题归属）：
 
 | 现象 | 含义 | 处置 |
