@@ -63,10 +63,14 @@ export function createApp(
       publicApi: false,
     }));
 
-  app.all(APPLICATION_MANIFEST_PATH, c =>
-    handleApplicationRequest(c.req.raw, c.env));
-  app.all(APPLICATION_VERIFY_PATH, c =>
-    handleApplicationRequest(c.req.raw, c.env));
+  app.all(APPLICATION_MANIFEST_PATH, async c => {
+    const response = await handleApplicationRequest(c.req.raw, c.env);
+    return response ?? c.json({ error: "not_found" }, 404);
+  });
+  app.all(APPLICATION_VERIFY_PATH, async c => {
+    const response = await handleApplicationRequest(c.req.raw, c.env);
+    return response ?? c.json({ error: "not_found" }, 404);
+  });
 
   // The only agent-facing HTTP surface. Missing Mira ID V1 trust stays closed.
   app.all(MCP_RESOURCE_PATH, c => {
