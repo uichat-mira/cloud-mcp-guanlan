@@ -57,12 +57,12 @@ manifest 只保存这些 tool name 的引用与可选治理提示；输入/输�
 - `service_id === news`
 - 有非空 `sub`、`device_id`
 - `iat / nbf / exp` 合法且总寿命不超过 10 分钟
-- scope 是封闭集合：必须含 `guanlan.read`，可额外含 `guanlan.write`
+- scope 是封闭集合：当前 `news` service 在 manifest 中声明 `guanlan.read + guanlan.write`，Mira ID V1 按当前声明签发完整 scope 集合
 - 不接受未声明扩展 claim
 
 本阶段 `consumerId = sub`：账号主体就是默认稳定消费身份。数据库里历史上支持的多消费者模型不因此自动删除，但任何新的命名消费者/切换能力必须另立产品与授权合同，不能靠客户端参数或自定义 JWT claim 偷渡。
 
-`guanlan_news_decide` 继续独立要求 `guanlan.write`；拥有 read token 不等于拥有写权限。
+`guanlan_news_decide` 继续独立检查 `guanlan.write` 作为资源端纵深防御。当前 Mira ID V1 **不支持 application service 按次选择 scope 子集**：合法 `news` 凭据会携带 manifest 声明的 read + write；如果未来需要只读 grant，应先扩展开放平台合同或另立清晰服务边界，不能在观澜私自发明半套签发协议。
 
 ## 5. MCP contract
 
