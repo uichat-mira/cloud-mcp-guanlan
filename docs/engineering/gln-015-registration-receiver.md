@@ -12,8 +12,9 @@
 2. `GET /.well-known/mira-application` 公布应用、品牌、OAuth 与服务元信息。
 3. Mira ID 通过同源 `POST /mira/verify-registration` 验证 `APP_ID + AppSecret`，完成实例所有权登记。
 4. 观澜声明一个 `serviceId = news` 的标准 MCP 服务，resource 为该实例真实 `/mcp` URL。
-5. Mira ID 按 `APP_ID + serviceId + resource` 为获准账号/终端签发短期服务凭据。
-6. 观澜只验证并消费该凭据；真实工具能力继续由标准 MCP `tools/list` / `tools/call` 提供。
+5. 用户从观澜首页通过 Mira ID Open Application OAuth V1 + PKCE S256 完成一次显式授权，Mira ID 建立该账号对本实例的 application service grant。
+6. Mira ID 按 `APP_ID + serviceId + resource` 为已获准账号的有效终端签发短期服务凭据。
+7. 观澜只验证并消费该凭据；真实工具能力继续由标准 MCP `tools/list` / `tools/call` 提供。
 
 Mira ID 的应用/服务声明属于 MCP 外层。它不能复制 Tool Schema、替代 ToolAnnotations、扩张业务权限或引入 Mira 私有 MCP wire protocol。
 
@@ -64,7 +65,16 @@ manifest 只保存这些 tool name 的引用与可选治理提示；输入/输�
 
 `guanlan_news_decide` 继续独立检查 `guanlan.write` 作为资源端纵深防御。当前 Mira ID V1 **不支持 application service 按次选择 scope 子集**：合法 `news` 凭据会携带 manifest 声明的 read + write；如果未来需要只读 grant，应先扩展开放平台合同或另立清晰服务边界，不能在观澜私自发明半套签发协议。
 
-## 5. MCP contract
+## 5. OAuth grant bootstrap
+
+- 首页只提供一个轻量“通过 Mira ID 连接观澜”入口，不建设第二套账号中心。
+- 使用授权码 + PKCE S256；state/verifier 仅存在 5 分钟的 `__Host-` Secure + HttpOnly + SameSite=Lax Cookie。
+- 回调只接受当前实例精确 callback，严格校验 state、授权码形态、token 的 issuer / audience / appId / expiry，并调用 Mira ID `/v1/oauth/application-session` 二次确认。
+- AppSecret 不参与 OAuth；不接受 client_secret、Cloud Session、installation_id 或 platform 私有字段。
+- 成功后不把临时 application access token 写入 Cookie、D1、HTML 或浏览器存储；service grant 由 Mira ID 的唯一授权台账管理。
+- 失败页只显示有限错误类别与可重试入口，不回显 code、verifier、token、subject 或底层异常文本。
+
+## 6. MCP contract
 
 - 只接受 MCP `2026-07-28`。
 - 官方 SDK handler 使用 `legacy: "reject"`。
@@ -72,18 +82,19 @@ manifest 只保存这些 tool name 的引用与可选治理提示；输入/输�
 - 旧 `2025-06-18` / `2025-11-25` initialize 客户端必须失败，不做静默降级。
 - 标准 MCP Client 在取得合法凭据后应可直接互操作，不要求理解 Mira 外层 manifest。
 
-## 6. Retired HMAC receiver
+## 7. Retired HMAC receiver
 
 旧 `POST /internal/guanlan-registrations` 已退出运行入口；旧 receiver 源码与其专项测试删除。
 
 历史 migration / receipt 表可以暂时保留，原因是已执行数据库迁移不可假装从未存在；保留历史表不等于保留旧协议。不得重新接回 HMAC endpoint、共享 secret 或 Cloud Auth 账号创建投递链。
 
-## 7. Verification gates
+## 8. Verification gates
 
 合并前至少证明：
 
 - manifest 与登记验证的单元合同，包括“运行时仅保存 AppSecret SHA-256 摘要、正确明文可验证、错误明文 fail-closed”；
 - manifest toolRefs 与实际 `tools/list` 一致；
+- 真实 OAuth PKCE start/callback 合同：S256、短期硬化 Cookie、state 绑定、严格 token/session 身份校验、成功页不持久化 token；
 - 真实 2026-07-28 client 的 `tools/list` / `tools/call`；
 - V1 EdDSA 凭据的 app/service/resource/scope/expiry 负例；
 - legacy client 失败；
