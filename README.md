@@ -1,70 +1,66 @@
-# Cloud MCP Guanlan · 云端观澜
+# 观澜 Guanlan
 
-**Mira Cloud 的基础新闻采集与聚合服务。**
+**Mira Cloud 的持续新闻采集与消费记忆服务。**
 
-观澜接受用户配置的公共/私人新闻源与关注点，按小时级配置持续采集**标题、摘要、原文链接及必要元数据**，向授权的外部 Agent 提供统一、可追溯、可增量消费的新闻候选，并维护**每个消费者独立且持久的处理状态**。
+观澜持续采集用户有权访问的新闻源，保存标题、摘要、原文链接与必要元数据，并向授权 Agent 提供统一、可追溯、可分页的候选视图。观澜负责**采集、过滤、去重和记账**；理解原文、判断价值与采取行动仍由 Agent 完成。
 
-观澜负责“采集和记账”，不负责“理解与决策”。外部 Agent 自行选择是否 Web Fetch 原文、是否采用新闻，并明确回写处理结果。
+> **当前状态（2026-11-27）：** 业务底座已有 Workers/D1 采集、租约、来源安全、多用户数据模型、订阅读取、消费状态账本，以及标准 MCP 的 `guanlan_news_recent`、`guanlan_whoami`、`guanlan_news_decide`。GLN-015 正在把服务切换到 **Mira ID Open Platform V1 应用实例架构 + MCP 2026-07-28**：旧 HMAC 账号空间注册、固定 `mira:cloud-guanlan` audience、客户端 consumer claim 与 legacy MCP fallback 已退出目标架构。尚未完成真实 Mira ID dev 纵切与生产上线。
 
-> **当前能力：** 已有公共 Feed 采集与 D1 租约/去重 POC、受保护的只读 MCP 服务端、GLN-005 的多用户数据模型，以及 GLN-006 有效订阅读取、GLN-007 消费者决策账本、GLN-009 的**按账户 × 稳定消费者授权、可分页/可筛选消费状态**的 MCP 新闻读取，和 GLN-010 的 **MCP 消费状态写回工具 `guanlan_news_decide`**（复用 GLN-007 CAS/幂等账本，读取页返回 `stateVersion`，写入需独立 `guanlan.write` scope）。GLN-003 的隔离 Cloudflare 实测已完成研究验收，但 Workers Free 持续 Cron CPU 裕量仍未获放行；真实 Cloud Auth 账号与 `guanlan.write` 正式签发联调、Desktop/Mobile 接入和生产上线尚未完成。
-> 请勿将本 README 中的目标能力理解为已经上线的 API 或 Cloudflare 服务。
+## 产品与架构真相
 
-## 设计入口
+**[产品与服务设计 v1](docs/product-design.md)** 是产品边界的单一真相源。当前身份与协议切换以 **[GLN-015 工程合同](docs/engineering/gln-015-registration-receiver.md)** 与 [Issue #28](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/28) 为准。
 
-**[产品与服务设计 v0](docs/product-design.md)** 是本仓库产品决策、非目标、消费状态、授权边界及待决问题的单一真相源。README 只做概览，不重复维护完整契约。
+当前链路：
 
-远程 MCP 是外部 Agent 的 canonical 集成入口；当前协议、Cloud Auth 边界、工具与未交付依赖见 [GLN-004 工程边界](docs/engineering/gln-004-mcp.md)。REST 不作为平行的 Agent API。
+`观澜部署实例 → Mira ID 应用登记 → 账号授权 → APP_ID + serviceId + resource 短期凭据 → 标准 MCP → Guanlan tools`
 
-## 已确定的核心原则
+观澜发布 `/.well-known/mira-application`，声明应用 **观澜 Guanlan** 与 `serviceId = news` 的 MCP 服务。Mira ID 管应用身份、实例所有权、账号授权和短期服务凭据；观澜只管理新闻业务数据与资源端授权。MCP wire protocol 保持官方标准，不为 Mira 魔改。
 
-- **独立云服务，多用户使用。** 身份统一由 Mira Cloud Account / Cloud Auth 提供，不再自建账号体系。
-- **公共源 + 个人订阅。** 私人订阅和关注点不公开；同 URL 可以在后台复用采集，不泄漏订阅关系。
-- **轻量新闻索引。** 仅标题、摘要、原文链接及必要元数据；不抓全文、不生成 AI 摘要、不做事件级聚类。
-- **关键词筛选而非语义智能。** 默认按关注点读取；Agent 可以主动扩大到有权限的新闻范围。
-- **明确消费状态。** 未读、已读待决、已采用、已忽略；读取无副作用，显式回写，换会话后不丢处理记忆。
-- **每个消费者独立。** 不同 Agent 对同一条新闻可以做不同决定，状态可附可选理由和成果链接。
-- **面向 Agent 的统一视图。** Markdown 优先、JSON 辅助；每个 Agent 可以获得专属、可撤销的私人只读链接，写入仍需单独授权。
-- **建议不等于修改。** Agent 可以提出订阅配置建议，只有用户确认后才能生效。
-- **新闻索引保留 90 天。** 精简去重指纹和处理记忆长期保留，仍支持授权撤销及必要的数据删除。
-- **小时级采集间隔配置。** 不要求实时推送。
+## 核心原则
 
-## 首选部署方向（待技术验证）
+- **独立应用，不自建账号。** 身份与应用授权由 Mira ID 负责；观澜不保存密码，也不使用 Cloud Auth 创建账号时的 HMAC 投递旁路。
+- **实例级服务身份。** 服务凭据精确绑定 `APP_ID + serviceId + resource`；同名服务不能因为 serviceId 相同而互相信任。
+- **首期消费身份 = Cloud Account subject。** MCP 凭据中的已验证 `sub` 同时作为默认稳定 consumer，跨设备与模型会话共享处理账本。历史多-consumer 数据模型保留，但未来重新开放命名 consumer 必须另立产品与授权合同。
+- **公共源 + 私有订阅。** 私人订阅和关注点不公开；相同可抓取 URL 可在后台复用采集，但不得泄漏订阅关系。
+- **轻量索引。** 保存标题、摘要、原文 URL、时间与必要元数据；不默认抓正文，不在观澜内运行 LLM，也不做事件级语义聚类。
+- **读取无副作用，决定显式写回。** 未读、待决、已采用、已忽略由明确写操作改变；换会话后仍可继续。
+- **标准 MCP。** 只接受 `2026-07-28` 当前协议路径；旧 `2025-06-18` / `2025-11-25` initialize 不静默降级。
+- **一个服务声明的真实权限。** 当前 Mira ID V1 对 `news` 签发 manifest 声明的完整 `guanlan.read + guanlan.write` scope；`guanlan_news_decide` 仍检查 write 作为纵深防御。
+- **建议不等于配置修改。** Agent 可以提出来源/关注点调整建议，但配置变更需要独立、明确的产品授权路径。
 
-以 **Cloudflare Workers Free + Cron Triggers + D1** 为第一候选，力求零额外费用、有限资源下的可靠服务；**这不排除未来上阿里云**，但大陆用户入口及新闻源出口可达性都必须真实验证，多 Worker/双部署暂不建设。**已验证隔离 Canary 的真实运行，但 10ms Free 单次 CPU 仍缺乏可靠余量；免费额度耗尽时的降级优先级仍由维护者决定。**
+## 当前 MCP 工具
 
-不为首版默认引入 LLM、向量检索、浏览器抓取、内置 Agent 或额外付费基础设施。
+- `guanlan_whoami`：读取当前已验证账号、consumer 与 scope。
+- `guanlan_news_recent`：读取该账号可见的新闻候选、状态与分页。
+- `guanlan_news_decide`：把 pending / adopted / ignored 等消费结果写回该账号的持久账本。
 
-## 与已有 Mira Desktop 的关系
+真实 Tool Schema 与 ToolAnnotations 以 MCP `tools/list` 为准；Mira ID manifest 只引用 tool name 和外层治理提示，不复制 schema。
 
-Desktop 的本地 NewsHub 已有采集、订阅、SQLite 缓存和检索实现。这里是**新的云服务边界**，不是将整个桌面后端原样搬进 Worker；本仓库不自动授权改变或移除现有桌面能力。
+## 部署方向
 
-参考：
+Cloudflare Workers + D1 仍是当前首选运行形态，但**是否长期留在 Cloudflare 由上线后的真实运行数据决定**。GLN-003 已做过隔离 Canary 与 CPU 剖析；这不等于生产容量承诺，也不应阻塞观澜先完成产品化与 Mira ID 纵切。
 
-- [Mira Cloud Auth 设计](https://github.com/uichat-mira/.github/blob/main/docs/engineering/mira-cloud-auth.md)
-- [Desktop dev](https://github.com/uichat-mira/mira-desktop/tree/dev)
-- [Cloudflare Workers 官方限制](https://developers.cloudflare.com/workers/platform/limits/)
-- [Cloudflare D1 定价与免费额度](https://developers.cloudflare.com/d1/platform/pricing/)
+仓库默认配置 `wrangler.jsonc` 目前仍是不可生产部署的占位配置；生产 D1、密钥、Cron 和环境晋级必须走独立部署纪律，不能从功能分支直接冒充生产。
 
-## 项目状态与工程协作
+## 工程状态
 
-[GLN-003](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/6) 是已完成的隔离运行研究，结论仍是不批准依赖 Free 10ms CPU 的长期 Cron；相关 Canary 保留且调度关闭。[GLN-004](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/8) 的远程 MCP 协议代码已并入 `dev`，但不代表真实 Cloud Auth 令牌或客户端已经接通。[GLN-005](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/11) 的多用户持久化模型也已进入 `dev`。[GLN-008](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/15) 的来源安全准入（精确测试 URL 白名单 + fail-closed URL 策略 + 受控登记）由 [PR #19](https://github.com/uichat-mira/cloud-mcp-guanlan/pull/19) 交付 `dev`；未部署、未开启 Cron，也未证明真实 DNS 出站防护或 Free CPU 长期余量。[GLN-006](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/13)、[GLN-007](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/14) 与 [GLN-009](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/16) 的领域合同（有效订阅、决策账本、授权分页读取）同样只进入 `dev`。[GLN-010](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/22) 的 MCP 写回工具在本分支实现，使用受控测试凭证完成真实 MCP 客户端与 workerd/D1 验收；它**不是**已签发的 Cloud Auth 写权限，也未部署，仍无真实 Cloud Auth 账号、正式 `guanlan.write` 签发或生产部署。
+已进入 `dev` 的业务基础包括：
 
-- [仓库工程约束](AGENTS.md)
-- [GLN-010 MCP 消费状态写回](docs/engineering/gln-010-mcp-consumption-write.md)：写工具 Schema、独立写 scope、`stateVersion`、错误/幂等合同与验收证据。
-- [GLN-009 授权新闻分页与消费状态查询](docs/engineering/gln-009-authorized-news-reader.md)：查询/游标/状态合同、SQL 方案与剩余裁决项。
-- [GLN-008 来源安全准入与受控采集边界](docs/engineering/gln-008-source-safety.md)：接受/拒绝矩阵、Workers 能力限制与剩余安全边界。
-- [Issue 任务卡与付费 OpenCode Worker 使用说明](docs/engineering/work-items.md)
-- `bash scripts/check.sh`：有运行时代码后执行完整 `npm run check`（类型、解析、真实 workerd/D1 集成、Wrangler dry-run、同环境基准）。
-- [GLN-001 技术证据](docs/engineering/gln-001-poc.md)：运行结果、选型结论和剩余限制。
-- `.github/workflows/mira-external-worker.yml`：可信 Issue 评论触发**付费** OpenCode Worker，交付 Draft PR 到 `dev`，不自动合并。
-- `.github/workflows/ci.yml`：Mira Gate 与分支流程检查，执行结果以真实 Actions 为准。
+- [GLN-003](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/6)：Cloudflare 隔离运行研究与 CPU 剖析。
+- [GLN-005](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/11)：多用户持久化模型。
+- [GLN-006](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/13)：有效订阅读取。
+- [GLN-007](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/14)：消费决策账本。
+- [GLN-008](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/15)：来源安全准入。
+- [GLN-009](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/16)：授权新闻分页与状态查询。
+- [GLN-010](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/22)：MCP 消费状态写回。
+- [GLN-015](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/28)：Mira ID V1 应用实例与标准 MCP 切换（当前进行中）。
 
-后续按 [Mira Organization AGENTS](https://github.com/uichat-mira/.github/blob/main/AGENTS.md) 小步实现、用运行证据验收。仓库当前默认分支为 **dev**；尚未创建 `test` 或 `prod` 环境分支。
+工程约束见 [AGENTS.md](AGENTS.md)。有运行时代码变更时执行 `bash scripts/check.sh` / `npm run check`；Actions 的 Repository Contract 与 Mira Gate 是证据，不替代维护者对实际链路的验收。
+
+## 与 Mira Desktop / Mobile 的关系
+
+观澜不是把 Desktop NewsHub 原样搬到云端，也不是内置 Agent。Desktop / Mobile 通过 Mira ID 的账号关联服务目录发现观澜，再按标准 MCP 消费同一云端能力。端侧的工具选择、渐进式披露和本地治理属于客户端职责。
 
 ## License
 
 [MIT](LICENSE)
-
-## Cloudflare 隔离验收（GLN-003）
-
-[GLN-003 工程手册与证据状态](docs/engineering/gln-003-cloudflare-canary.md) 记录专属 Workers/D1 Canary 的真实执行、CPU/行用量与安全收尾；[九次 CPU 三段剖析报告](docs/engineering/gln-003-cpu-profile.md) 记录解析与 D1 成本。**当前 Canary 保留但 Cron 关闭，不是产品上线。** `npm run test:canary` / `npm run dry-run:canary` 仅验证隔离配置和真实应用打包，不产生云端副作用。
