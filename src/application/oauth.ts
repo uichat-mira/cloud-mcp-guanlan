@@ -144,11 +144,12 @@ function hasStrictQuery(
   allowed: ReadonlySet<string>,
 ): boolean {
   const seen = new Set<string>();
-  for (const [key] of url.searchParams) {
-    if (!allowed.has(key) || seen.has(key)) return false;
+  let valid = true;
+  url.searchParams.forEach((_value, key) => {
+    if (!allowed.has(key) || seen.has(key)) valid = false;
     seen.add(key);
-  }
-  return true;
+  });
+  return valid;
 }
 
 function redirect(location: string, headers = securityHeaders("text/plain; charset=utf-8")): Response {
@@ -247,7 +248,7 @@ export async function handleApplicationOAuthRequest(
   }
 
   if (url.pathname === APPLICATION_OAUTH_START_PATH) {
-    if ([...url.searchParams].length > 0) {
+    if (url.search !== "") {
       return failed(400, "unexpected_parameter", "连接请求包含无法识别的参数。");
     }
     const state = randomValue(32);
