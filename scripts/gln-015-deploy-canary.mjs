@@ -108,6 +108,74 @@ try {
   run(["secret", "put", "GUANLAN_APP_SECRET"], {
     input: process.env.GUANLAN_APP_SECRET + "\n",
   });
+
+  const base = resource.origin;
+  const expectJson = async (url, expectedStatus, init) => {
+    const response = await fetch(url, init);
+    if (response.status !== expectedStatus) {
+      throw new Error(`Smoke check ${new URL(url).pathname} returned ${response.status}; expected ${expectedStatus}`);
+    }
+    const text = await response.text();
+    let body = null;
+    if (text) {
+      try { body = JSON.parse(text); } catch { body = text; }
+    }
+    return { response, body };
+  };
+
+  const health = await expectJson(base + "/health", 200);
+  if (health.body?.status !== "ok" || health.body?.product !== "观澜 Guanlan") {
+    throw new Error("Health payload does not identify the Guanlan product");
+  }
+
+  const manifestResult = await expectJson(base + "/.well-known/mira-application", 200);
+  const manifest = manifestResult.body;
+  if (
+    manifest?.schemaVersion !== "1" ||
+    manifest?.appId !== appId ||
+    manifest?.name !== "观澜 Guanlan" ||
+    manifest?.services?.length !== 1 ||
+    manifest.services[0]?.serviceId !== "news" ||
+    manifest.services[0]?.resource !== process.env.MCP_RESOURCE_URL ||
+    manifest.services[0]?.protocol?.version !== "2026-07-28"
+  ) {
+    throw new Error("Mira ID application manifest did not match the GLN-015 instance contract");
+  }
+  if (JSON.stringify(manifest).includes(process.env.GUANLAN_APP_SECRET)) {
+    throw new Error("Application secret leaked into the public manifest");
+  }
+
+  const registration = await expectJson(base + "/mira/verify-registration", 200, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      appId,
+      appSecret: process.env.GUANLAN_APP_SECRET,
+    }),
+  });
+  if (registration.body?.ok !== true || registration.body?.appId !== appId) {
+    throw new Error("Registration verification response was invalid");
+  }
+
+  const metadata = await expectJson(base + "/.well-known/oauth-protected-resource/mcp", 200);
+  if (
+    metadata.body?.resource !== process.env.MCP_RESOURCE_URL ||
+    !Array.isArray(metadata.body?.authorization_servers) ||
+    !metadata.body.authorization_servers.includes(process.env.CLOUD_AUTH_ISSUER)
+  ) {
+    throw new Error("Protected-resource metadata did not bind the V1 resource");
+  }
+
+  await expectJson(base + "/mcp", 401, { method: "POST" });
+  await expectJson(base + "/internal/guanlan-registrations", 404, { method: "POST" });
+
+  console.log(JSON.stringify({
+    status: "PASS",
+    check: "gln-015-canary",
+    worker: workerName,
+    appId,
+    resource: process.env.MCP_RESOURCE_URL,
+  }));
 } finally {
   rmSync(configPath, { force: true });
 }
