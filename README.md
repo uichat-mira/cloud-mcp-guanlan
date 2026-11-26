@@ -4,7 +4,7 @@
 
 观澜持续采集用户有权访问的新闻源，保存标题、摘要、原文链接与必要元数据，并向授权 Agent 提供统一、可追溯、可分页的候选视图。观澜负责**采集、过滤、去重和记账**；理解原文、判断价值与采取行动仍由 Agent 完成。
 
-> **当前状态（2026-11-27）：** 业务底座已有 Workers/D1 采集、租约、来源安全、多用户数据模型、订阅读取、消费状态账本，以及标准 MCP 的 `guanlan_news_recent`、`guanlan_whoami`、`guanlan_news_decide`。GLN-015 正在把服务切换到 **Mira ID Open Platform V1 应用实例架构 + MCP 2026-07-28**：旧 HMAC 账号空间注册、固定 `mira:cloud-guanlan` audience、客户端 consumer claim 与 legacy MCP fallback 已退出目标架构。尚未完成真实 Mira ID dev 纵切与生产上线。
+> **当前状态（2026-11-27）：** 业务底座已有 Workers/D1 采集、租约、来源安全、多用户数据模型、订阅读取、消费状态账本，以及标准 MCP 的 `guanlan_news_recent`、`guanlan_whoami`、`guanlan_news_decide`。GLN-015 已在隔离 Cloudflare Worker/D1 上完成 **Mira ID Open Platform V1 应用声明 + MCP 2026-07-28** 云端 smoke；旧 HMAC 账号空间注册、固定 `mira:cloud-guanlan` audience、客户端 consumer claim 与 legacy MCP fallback 已退出目标架构。仍待真实 Mira ID 账号完成应用所有权登记与 V1 服务凭据纵切，尚未生产上线。
 
 ## 产品与架构真相
 
@@ -19,7 +19,7 @@
 ## 核心原则
 
 - **独立应用，不自建账号。** 身份与应用授权由 Mira ID 负责；观澜不保存密码，也不使用 Cloud Auth 创建账号时的 HMAC 投递旁路。
-- **实例级服务身份。** 服务凭据精确绑定 `APP_ID + serviceId + resource`；同名服务不能因为 serviceId 相同而互相信任。
+- **实例级服务身份。** 服务凭据精确绑定 `APP_ID + serviceId + resource`；同名服务不能因为 serviceId 相同而互相信任。应用所有权登记的 AppSecret 在观澜运行时只保存 SHA-256 摘要，明文不作为长期 Worker secret。
 - **首期消费身份 = Cloud Account subject。** MCP 凭据中的已验证 `sub` 同时作为默认稳定 consumer，跨设备与模型会话共享处理账本。历史多-consumer 数据模型保留，但未来重新开放命名 consumer 必须另立产品与授权合同。
 - **公共源 + 私有订阅。** 私人订阅和关注点不公开；相同可抓取 URL 可在后台复用采集，但不得泄漏订阅关系。
 - **轻量索引。** 保存标题、摘要、原文 URL、时间与必要元数据；不默认抓正文，不在观澜内运行 LLM，也不做事件级语义聚类。
