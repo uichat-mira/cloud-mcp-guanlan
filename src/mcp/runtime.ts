@@ -23,26 +23,31 @@ export type McpRuntimeResult =
 
 const cache = new WeakMap<D1Database, Map<string, McpRuntimeResult>>();
 
-/**
- * Resolves config and dependencies for one request. Production trust is built
- * only from the configured Cloud Auth issuer/JWKS/audience; tests inject a
- * deterministic verifier through their own worker entry, not through env.
- */
-export function createMcpRuntime(env: McpRuntimeEnv, options: McpRuntimeOptions = {}): McpRuntimeResult {
+export function createMcpRuntime(
+  env: McpRuntimeEnv,
+  options: McpRuntimeOptions = {},
+): McpRuntimeResult {
   const resolved = resolveMcpConfig(env);
   if (!resolved.ok) return resolved;
 
   const { config } = resolved;
-  if (options.verifier || options.reader || options.decider) {
-    const verifier = options.verifier ?? createCloudAuthVerifier({
+  const verifierOf = () =>
+    createCloudAuthVerifier({
       issuer: config.tokenIssuer,
       audience: config.audience,
       jwksUrl: config.jwksUrl,
-      consumerClaim: config.consumerClaim,
+      appId: config.appId,
+      serviceId: config.serviceId,
     });
+
+  if (options.verifier || options.reader || options.decider) {
+    const verifier = options.verifier ?? verifierOf();
     const reader = options.reader ?? createD1NewsReader(env.DB);
     const decider = options.decider ?? createD1NewsDecider(env.DB);
-    return { ok: true, runtime: createGuanlanMcp(config, verifier, reader, decider) };
+    return {
+      ok: true,
+      runtime: createGuanlanMcp(config, verifier, reader, decider),
+    };
   }
 
   const key = [
@@ -50,9 +55,8 @@ export function createMcpRuntime(env: McpRuntimeEnv, options: McpRuntimeOptions 
     config.issuer,
     config.tokenIssuer,
     config.jwksUrl.href,
-    config.audience,
-    config.requiredScopes.join(" "),
-    config.consumerClaim,
+    config.appId,
+    config.serviceId,
   ].join("\n");
   let byKey = cache.get(env.DB);
   if (!byKey) {
@@ -62,15 +66,14 @@ export function createMcpRuntime(env: McpRuntimeEnv, options: McpRuntimeOptions 
   const existing = byKey.get(key);
   if (existing) return existing;
 
-  const verifier = createCloudAuthVerifier({
-    issuer: config.tokenIssuer,
-    audience: config.audience,
-    jwksUrl: config.jwksUrl,
-    consumerClaim: config.consumerClaim,
-  });
   const result: McpRuntimeResult = {
     ok: true,
-    runtime: createGuanlanMcp(config, verifier, createD1NewsReader(env.DB), createD1NewsDecider(env.DB)),
+    runtime: createGuanlanMcp(
+      config,
+      verifierOf(),
+      createD1NewsReader(env.DB),
+      createD1NewsDecider(env.DB),
+    ),
   };
   byKey.set(key, result);
   return result;
