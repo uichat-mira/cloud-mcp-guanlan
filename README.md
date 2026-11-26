@@ -12,13 +12,13 @@
 
 当前链路：
 
-`观澜部署实例 → Mira ID 应用登记 → 账号授权 → APP_ID + serviceId + resource 短期凭据 → 标准 MCP → Guanlan tools`
+`观澜部署实例 → Mira ID 应用登记 → 用户 OAuth PKCE 授权 → application service grant → APP_ID + serviceId + resource 短期凭据 → 标准 MCP → Guanlan tools`
 
 观澜发布 `/.well-known/mira-application`，声明应用 **观澜 Guanlan** 与 `serviceId = news` 的 MCP 服务。Mira ID 管应用身份、实例所有权、账号授权和短期服务凭据；观澜只管理新闻业务数据与资源端授权。MCP wire protocol 保持官方标准，不为 Mira 魔改。
 
 ## 核心原则
 
-- **独立应用，不自建账号。** 身份与应用授权由 Mira ID 负责；观澜不保存密码，也不使用 Cloud Auth 创建账号时的 HMAC 投递旁路。
+- **独立应用，不自建账号。** 身份与应用授权由 Mira ID 负责；观澜不保存密码，也不使用 Cloud Auth 创建账号时的 HMAC 投递旁路。首页通过标准 OAuth 授权码 + PKCE S256 建立服务 grant，Mira ID 密码只提交给 Mira ID。
 - **实例级服务身份。** 服务凭据精确绑定 `APP_ID + serviceId + resource`；同名服务不能因为 serviceId 相同而互相信任。应用所有权登记的 AppSecret 在观澜运行时只保存 SHA-256 摘要，明文不作为长期 Worker secret。
 - **首期消费身份 = Cloud Account subject。** MCP 凭据中的已验证 `sub` 同时作为默认稳定 consumer，跨设备与模型会话共享处理账本。历史多-consumer 数据模型保留，但未来重新开放命名 consumer 必须另立产品与授权合同。
 - **公共源 + 私有订阅。** 私人订阅和关注点不公开；相同可抓取 URL 可在后台复用采集，但不得泄漏订阅关系。
