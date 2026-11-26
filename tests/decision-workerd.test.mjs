@@ -7,11 +7,10 @@ import { join } from "node:path";
 import { Miniflare } from "miniflare";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import {
-  MCP_TEST_AUDIENCE,
+  MCP_TEST_APP_ID,
   MCP_TEST_ISSUER,
   MCP_TEST_JWKS_URL,
   MCP_TEST_RESOURCE_URL,
-  MCP_TEST_SCOPE,
 } from "../dist/mcp-fixtures.mjs";
 
 // GLN-010 T3: real Miniflare/workerd + D1 evidence for the MCP consumption write
@@ -23,8 +22,7 @@ const FIXTURE_BINDINGS = {
   MCP_RESOURCE_URL: MCP_TEST_RESOURCE_URL,
   CLOUD_AUTH_ISSUER: MCP_TEST_ISSUER,
   CLOUD_AUTH_JWKS_URL: MCP_TEST_JWKS_URL,
-  MCP_AUDIENCE: MCP_TEST_AUDIENCE,
-  MCP_REQUIRED_SCOPES: MCP_TEST_SCOPE,
+  GUANLAN_APP_ID: MCP_TEST_APP_ID,
 };
 const STAMP = "2026-11-01T00:00:00.000Z";
 const MIGRATIONS = [
@@ -78,25 +76,21 @@ async function seedDomain(db) {
   ]) {
     await db.prepare(sql).bind(...values).run();
   }
-  for (const accountId of ["account-a", "account-b", "account-empty"]) {
-    await db.prepare("INSERT INTO guanlan_accounts (account_id,created_at) VALUES (?,?)").bind(accountId, STAMP).run();
-  }
-  for (const [accountId, consumerId] of [
-    ["account-a", "consumer-1"],
-    ["account-a", "consumer-2"],
-    ["account-b", "consumer-b"],
-    ["account-empty", "consumer-empty"],
-  ]) {
+  for (const accountId of ["account-c", "account-c", "account-b", "account-empty"]) {
+    await db.prepare("INSERT INTO guanlan_accounts (account_id,created_at) VALUES (?,?)")
+      .bind(accountId, STAMP).run();
     await db.prepare("INSERT INTO guanlan_consumers (account_id,consumer_id,created_at) VALUES (?,?,?)")
-      .bind(accountId, consumerId, STAMP).run();
+      .bind(accountId, accountId, STAMP).run();
   }
-  await db.prepare("INSERT INTO guanlan_account_subscriptions (account_id,source_id,interval_hours,created_at) VALUES (?,?,?,?)")
-    .bind("account-a", "feed-shared", 1, STAMP).run();
+  for (const accountId of ["account-c", "account-c"]) {
+    await db.prepare("INSERT INTO guanlan_account_subscriptions (account_id,source_id,interval_hours,created_at) VALUES (?,?,?,?)")
+      .bind(accountId, "feed-shared", 1, STAMP).run();
+  }
   await db.prepare("INSERT INTO guanlan_account_subscriptions (account_id,source_id,interval_hours,created_at) VALUES (?,?,?,?)")
     .bind("account-b", "feed-b", 1, STAMP).run();
-  for (const [consumerId, sourceId] of [["consumer-1", "feed-a1"], ["consumer-2", "feed-a2"]]) {
+  for (const [accountId, sourceId] of [["account-a", "feed-a1"], ["account-c", "feed-a2"]]) {
     await db.prepare("INSERT INTO guanlan_consumer_subscriptions (account_id,consumer_id,source_id,interval_hours,created_at) VALUES (?,?,?,?,?)")
-      .bind("account-a", consumerId, sourceId, 1, STAMP).run();
+      .bind(accountId, accountId, sourceId, 1, STAMP).run();
   }
 }
 
@@ -326,14 +320,14 @@ test("real workerd: authorized read → stateVersion → decide → re-read → 
   });
 });
 
-test("real workerd: decisions are isolated across consumers and accounts", async () => {
+test("real workerd: decisions are isolated across account consumers", async () => {
   await withWorker(async ({ mf, db }) => {
     await seedBaseline(db);
     const one = await connect(mf, "fixture-writer-1", modern());
     const two = await connect(mf, "fixture-writer-2", modern());
     const b = await connect(mf, "fixture-writer-account-b", modern());
     try {
-      // Consumer 1 decides shared1; consumer 2 sees it as unread (version 0).
+      // Account A decides shared1; consumer 2 sees it as unread (version 0).
       decisionOf(await callDecide(one.client, {
         url: NEWS.shared1, status: "adopted", expectedVersion: 0, operationId: "c1-op",
       }));
@@ -418,14 +412,14 @@ test("real workerd: tool arguments cannot select another account or consumer", a
         operationId: "spoof-op",
         // Extra, model-supplied fields must not be able to re-target the write.
         accountId: "account-b",
-        consumerId: "consumer-2",
+        consumerId: "account-c",
       }));
       assert.equal(result.state.version, 1);
       const rows = (await db.prepare(
         "SELECT account_id, consumer_id FROM guanlan_consumer_news_states",
       ).all()).results;
-      assert.deepEqual(rows, [{ account_id: "account-a", consumer_id: "consumer-1" }]);
-      // Consumer 2 remains unread, proving the write did not land on it.
+      assert.deepEqual(rows, [{ account_id: "account-a", consumer_id: "account-a" }]);
+      // Account C remains unread, proving the write did not land on it.
       const twoPage = itemsOf(await callNews(two.client, { limit: 50 }));
       assert.equal(twoPage.find(item => item.url === NEWS.shared1).stateVersion, 0);
     } finally {
@@ -564,33 +558,14 @@ test("real workerd: invalid input, unprovisioned writers and legacy clients stay
       assert.match(errorText(noSources), /guanlan_decision_not_available/);
       assert.equal(await ledgerCount(db), 0);
 
-      // The 2025-06-18 stateless legacy client reaches the same write tool.
-      const legacy = await connect(mf, "fixture-writer-1", { supportedProtocolVersions: ["2025-06-18"] });
-      try {
-        assert.equal(legacy.client.getProtocolEra(), "legacy");
-        const listed = await legacy.client.listTools();
-        assert.equal(listed.tools.length, 3);
-        const legacyDecision = decisionOf(await callDecide(legacy.client, {
-          url: NEWS.a1, status: "adopted", expectedVersion: 0, operationId: "legacy-op",
-        }));
-        assert.equal(legacyDecision.result, "updated");
-        assert.equal(legacyDecision.state.version, 1);
-      } finally {
-        await legacy.client.close();
+      for (const version of ["2025-06-18", "2025-11-25"]) {
+        await assert.rejects(
+          connect(mf, "fixture-writer-1", { supportedProtocolVersions: [version] }),
+          /protocol|legacy|initialize|version/i,
+          version,
+        );
       }
-
-      // The 2025-11-25 stateless legacy client reaches the same write tool too.
-      const legacy25 = await connect(mf, "fixture-writer-1", { supportedProtocolVersions: ["2025-11-25"] });
-      try {
-        assert.equal(legacy25.client.getProtocolEra(), "legacy");
-        const legacy25Decision = decisionOf(await callDecide(legacy25.client, {
-          url: NEWS.shared2, status: "adopted", expectedVersion: 0, operationId: "legacy-25-op",
-        }));
-        assert.equal(legacy25Decision.result, "updated");
-        assert.equal(legacy25Decision.state.version, 1);
-      } finally {
-        await legacy25.client.close();
-      }
+      assert.equal(await ledgerCount(db), 0);
     } finally {
       await writer.client.close();
       await unprovisioned.client.close();
