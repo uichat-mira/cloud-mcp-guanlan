@@ -8,7 +8,7 @@
 
 观澜不再作为 Cloud Auth 内部的特殊下游服务接入。它是一个正常的 **Mira ID 应用实例**：
 
-1. 部署实例生成并保存自己的 `APP_ID` 与 server-only `AppSecret`。
+1. 部署实例生成稳定 `APP_ID`；登记用 `AppSecret` 只在创建/轮换时短暂出现，运行时仅保存其 SHA-256 摘要。
 2. `GET /.well-known/mira-application` 公布应用、品牌、OAuth 与服务元信息。
 3. Mira ID 通过同源 `POST /mira/verify-registration` 验证 `APP_ID + AppSecret`，完成实例所有权登记。
 4. 观澜声明一个 `serviceId = news` 的标准 MCP 服务，resource 为该实例真实 `/mcp` URL。
@@ -22,7 +22,7 @@ Mira ID 的应用/服务声明属于 MCP 外层。它不能复制 Tool Schema、
 部署必须显式提供：
 
 - `GUANLAN_APP_ID`: 稳定实例身份；同一部署升级时保持不变，复制为另一个实例时重新生成。
-- `GUANLAN_APP_SECRET`: 只用于实例登记证明，不进入 manifest、浏览器状态、日志或 MCP token。
+- `GUANLAN_APP_SECRET_SHA256`: 登记 `AppSecret` 的 SHA-256 十六进制摘要。Worker 运行时不保存明文 AppSecret；明文只允许在所有权登记或隔离构建 probe 中短暂存在，不进入 manifest、日志、MCP token 或持久运行配置。
 - `GUANLAN_MANIFEST_REVISION`: manifest 内容变化时递增。
 - `MCP_RESOURCE_URL`: 精确的 HTTPS `/mcp` resource。
 - `CLOUD_AUTH_ISSUER` / `CLOUD_AUTH_JWKS_URL`: Mira ID 授权服务器与签名验证来源。
@@ -82,7 +82,7 @@ manifest 只保存这些 tool name 的引用与可选治理提示；输入/输�
 
 合并前至少证明：
 
-- manifest 与登记验证的单元合同；
+- manifest 与登记验证的单元合同，包括“运行时仅保存 AppSecret SHA-256 摘要、正确明文可验证、错误明文 fail-closed”；
 - manifest toolRefs 与实际 `tools/list` 一致；
 - 真实 2026-07-28 client 的 `tools/list` / `tools/call`；
 - V1 EdDSA 凭据的 app/service/resource/scope/expiry 负例；
