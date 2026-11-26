@@ -14,16 +14,18 @@ export const APPLICATION_VERIFY_PATH = "/mira/verify-registration";
 
 export type ApplicationEnv = {
   GUANLAN_APP_ID?: string;
-  GUANLAN_APP_SECRET?: string;
+  /** SHA-256 hex digest of the registration AppSecret; plaintext is never stored at runtime. */
+  GUANLAN_APP_SECRET_SHA256?: string;
   GUANLAN_MANIFEST_REVISION?: string;
   MCP_RESOURCE_URL?: string;
 };
 
 const appIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/;
+const sha256Pattern = /^[0-9a-f]{64}$/i;
 
 export function resolveApplicationInstance(env: ApplicationEnv) {
   const appId = env.GUANLAN_APP_ID;
-  const secret = env.GUANLAN_APP_SECRET;
+  const secretDigest = env.GUANLAN_APP_SECRET_SHA256;
   const revision = Number(env.GUANLAN_MANIFEST_REVISION);
   let resource: URL;
   try {
@@ -34,9 +36,8 @@ export function resolveApplicationInstance(env: ApplicationEnv) {
   if (
     !appId ||
     !appIdPattern.test(appId) ||
-    !secret ||
-    secret.length < 16 ||
-    secret.length > 512 ||
+    !secretDigest ||
+    !sha256Pattern.test(secretDigest) ||
     !Number.isSafeInteger(revision) ||
     revision < 1 ||
     resource.protocol !== "https:" ||
@@ -164,16 +165,27 @@ async function boundedJson(request: Request): Promise<unknown> {
   }
 }
 
-async function equalSecret(actual: string, expected: string): Promise<boolean> {
-  const encoder = new TextEncoder();
-  const [left, right] = await Promise.all(
-    [actual, expected].map(async value =>
-      new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value))),
-    ),
+function hexDigest(value: string): Uint8Array | null {
+  if (!sha256Pattern.test(value)) return null;
+  const bytes = new Uint8Array(32);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(value.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+async function matchesSecretDigest(
+  actual: string,
+  expectedHex: string,
+): Promise<boolean> {
+  const expected = hexDigest(expectedHex);
+  if (!expected) return false;
+  const actualDigest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(actual)),
   );
   let difference = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    difference |= left[index]! ^ right[index]!;
+  for (let index = 0; index < actualDigest.length; index += 1) {
+    difference |= actualDigest[index]! ^ expected[index]!;
   }
   return difference === 0;
 }
@@ -223,7 +235,10 @@ export async function handleApplicationRequest(
     typeof fields.appSecret !== "string" ||
     fields.appSecret.length < 16 ||
     fields.appSecret.length > 512 ||
-    !await equalSecret(fields.appSecret, env.GUANLAN_APP_SECRET!)
+    !await matchesSecretDigest(
+      fields.appSecret,
+      env.GUANLAN_APP_SECRET_SHA256!,
+    )
   ) {
     return denied();
   }
