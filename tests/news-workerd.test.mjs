@@ -74,14 +74,14 @@ async function seedDomain(db) {
     await db.prepare(sql).bind(...values).run();
   }
 
-  for (const accountId of ["account-c", "account-c", "account-b", "account-empty"]) {
+  for (const accountId of ["account-a", "account-c", "account-b", "account-empty"]) {
     await db.prepare("INSERT INTO guanlan_accounts (account_id,created_at) VALUES (?,?)")
       .bind(accountId, STAMP).run();
     await db.prepare("INSERT INTO guanlan_consumers (account_id,consumer_id,created_at) VALUES (?,?,?)")
       .bind(accountId, accountId, STAMP).run();
   }
 
-  for (const accountId of ["account-c", "account-c"]) {
+  for (const accountId of ["account-a", "account-c"]) {
     await db.prepare("INSERT INTO guanlan_account_subscriptions (account_id,source_id,interval_hours,created_at) VALUES (?,?,?,?)")
       .bind(accountId, "feed-shared", 1, STAMP).run();
   }
