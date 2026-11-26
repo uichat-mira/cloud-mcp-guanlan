@@ -1,13 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { createHash } from "node:crypto";
 
 const required = [
   "GLN015_CANARY_ALLOW",
   "GLN015_WORKER_NAME",
   "GLN015_D1_DATABASE_ID",
   "GUANLAN_APP_ID",
-  "GUANLAN_APP_SECRET",
   "GUANLAN_MANIFEST_REVISION",
   "MCP_RESOURCE_URL",
   "CLOUD_AUTH_ISSUER",
@@ -30,9 +30,23 @@ const appId = process.env.GUANLAN_APP_ID;
 if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/.test(appId)) {
   throw new Error("GUANLAN_APP_ID is invalid");
 }
-if (process.env.GUANLAN_APP_SECRET.length < 16 || process.env.GUANLAN_APP_SECRET.length > 512) {
-  throw new Error("GUANLAN_APP_SECRET length is invalid");
+const probeSecret = process.env.GUANLAN_APP_PROBE_SECRET ?? process.env.GUANLAN_APP_SECRET ?? "";
+const explicitDigest = process.env.GUANLAN_APP_SECRET_SHA256?.trim().toLowerCase() ?? "";
+if (explicitDigest && !/^[0-9a-f]{64}$/.test(explicitDigest)) {
+  throw new Error("GUANLAN_APP_SECRET_SHA256 must be a SHA-256 hex digest");
 }
+if (!explicitDigest && (probeSecret.length < 16 || probeSecret.length > 512)) {
+  throw new Error(
+    "Provide GUANLAN_APP_SECRET_SHA256, or a 16-512 byte build-only registration probe secret",
+  );
+}
+const runtimeSecretDigest =
+  explicitDigest ||
+  createHash("sha256").update(probeSecret).digest("hex");
+const probeMatchesDigest =
+  probeSecret.length >= 16 &&
+  probeSecret.length <= 512 &&
+  createHash("sha256").update(probeSecret).digest("hex") === runtimeSecretDigest;
 if (!/^[0-9]+$/.test(process.env.GUANLAN_MANIFEST_REVISION) ||
     Number(process.env.GUANLAN_MANIFEST_REVISION) < 1) {
   throw new Error("GUANLAN_MANIFEST_REVISION must be a positive integer");
@@ -74,6 +88,7 @@ const config = {
   ],
   vars: {
     GUANLAN_APP_ID: appId,
+    GUANLAN_APP_SECRET_SHA256: runtimeSecretDigest,
     GUANLAN_MANIFEST_REVISION: process.env.GUANLAN_MANIFEST_REVISION,
     MCP_RESOURCE_URL: process.env.MCP_RESOURCE_URL,
     CLOUD_AUTH_ISSUER: process.env.CLOUD_AUTH_ISSUER,
@@ -100,13 +115,9 @@ const run = (args, options = {}) => {
 try {
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
 
-  // Put the application secret on the retained isolated Worker before the code
-  // cutover. Wrangler deploy preserves existing secret bindings, so the first
-  // V1 version that receives traffic is already fully configured.
-  run(["secret", "put", "GUANLAN_APP_SECRET"], {
-    input: process.env.GUANLAN_APP_SECRET + "\n",
-  });
-
+  // Only the one-way digest is deployed. A plaintext value may exist in the
+  // ephemeral build environment solely to prove registration, but the Worker
+  // never needs or stores it.
   run(["deploy"]);
 
   const base = resource.origin;
@@ -160,20 +171,28 @@ try {
   ) {
     throw new Error("Mira ID application manifest did not match the GLN-015 instance contract");
   }
-  if (JSON.stringify(manifest).includes(process.env.GUANLAN_APP_SECRET)) {
-    throw new Error("Application secret leaked into the public manifest");
+  const encodedManifest = JSON.stringify(manifest);
+  if (
+    encodedManifest.includes(runtimeSecretDigest) ||
+    (probeSecret && encodedManifest.includes(probeSecret))
+  ) {
+    throw new Error("Application registration credential leaked into the public manifest");
   }
 
-  const registration = await expectJson(base + "/mira/verify-registration", 200, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      appId,
-      appSecret: process.env.GUANLAN_APP_SECRET,
-    }),
-  });
-  if (registration.body?.ok !== true || registration.body?.appId !== appId) {
-    throw new Error("Registration verification response was invalid");
+  let registrationProof = "skipped-no-matching-probe";
+  if (probeMatchesDigest) {
+    const registration = await expectJson(base + "/mira/verify-registration", 200, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        appId,
+        appSecret: probeSecret,
+      }),
+    });
+    if (registration.body?.ok !== true || registration.body?.appId !== appId) {
+      throw new Error("Registration verification response was invalid");
+    }
+    registrationProof = "verified";
   }
 
   const metadata = await expectJson(base + "/.well-known/oauth-protected-resource/mcp", 200);
@@ -194,6 +213,8 @@ try {
     worker: workerName,
     appId,
     resource: process.env.MCP_RESOURCE_URL,
+    registrationProof,
+    runtimeSecretStorage: "sha256-only",
   }));
 } finally {
   rmSync(configPath, { force: true });
