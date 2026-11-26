@@ -18,6 +18,8 @@ const FIXTURE_BINDINGS = {
   CLOUD_AUTH_ISSUER: MCP_TEST_ISSUER,
   CLOUD_AUTH_JWKS_URL: MCP_TEST_JWKS_URL,
   GUANLAN_APP_ID: MCP_TEST_APP_ID,
+  GUANLAN_APP_SECRET: "guanlan-workerd-secret-at-least-32-bytes",
+  GUANLAN_MANIFEST_REVISION: "1",
 };
 
 async function withWorker(scriptPath, bindings, run) {
@@ -244,7 +246,7 @@ test("unauthorized callers see 401 discovery but no tools or data", async () => 
       ["fixture-relay-audience", 401],
       ["fixture-expired", 401],
       ["fixture-missing-consumer", 401],
-      ["fixture-wrong-scope", 403],
+      ["fixture-wrong-scope", 401],
     ]) {
       const rejected = await mf.dispatchFetch(MCP_TEST_RESOURCE_URL, {
         method: "GET",
@@ -255,6 +257,51 @@ test("unauthorized callers see 401 discovery but no tools or data", async () => 
       });
       assert.equal(rejected.status, status, token);
     }
+  });
+});
+
+test("real workerd exposes the Mira ID V1 application declaration and retires the HMAC side channel", async () => {
+  await withWorker("dist/mcp-test-worker.mjs", FIXTURE_BINDINGS, async ({ mf }) => {
+    const manifestResponse = await mf.dispatchFetch(
+      "https://127.0.0.1/.well-known/mira-application",
+    );
+    assert.equal(manifestResponse.status, 200);
+    const manifest = await manifestResponse.json();
+    assert.equal(manifest.schemaVersion, "1");
+    assert.equal(manifest.appId, MCP_TEST_APP_ID);
+    assert.equal(manifest.name, "观澜 Guanlan");
+    assert.equal(manifest.services.length, 1);
+    assert.equal(manifest.services[0].serviceId, "news");
+    assert.equal(manifest.services[0].resource, MCP_TEST_RESOURCE_URL);
+    assert.equal(manifest.services[0].protocol.version, "2026-07-28");
+    assert.deepEqual(
+      new Set(manifest.services[0].capabilities.flatMap(capability => capability.toolRefs)),
+      new Set(["guanlan_whoami", "guanlan_news_recent", "guanlan_news_decide"]),
+    );
+    assert.doesNotMatch(
+      JSON.stringify(manifest),
+      /guanlan-workerd-secret-at-least-32-bytes/,
+    );
+
+    const verified = await mf.dispatchFetch(
+      "https://127.0.0.1/mira/verify-registration",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          appId: MCP_TEST_APP_ID,
+          appSecret: FIXTURE_BINDINGS.GUANLAN_APP_SECRET,
+        }),
+      },
+    );
+    assert.equal(verified.status, 200);
+    assert.deepEqual(await verified.json(), { ok: true, appId: MCP_TEST_APP_ID });
+
+    const retired = await mf.dispatchFetch(
+      "https://127.0.0.1/internal/guanlan-registrations",
+      { method: "POST" },
+    );
+    assert.equal(retired.status, 404);
   });
 });
 
