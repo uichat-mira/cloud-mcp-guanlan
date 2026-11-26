@@ -189,7 +189,7 @@ p{margin:0;max-width:540px;font-size:16px;line-height:1.8;opacity:.72}
 <div class="mark">MIRA CLOUD / GUANLAN</div>
 <h1>${title}</h1>
 <p>${message}</p>
-<div class="detail" role="${kind === "error" ? "alert" : "status"}">报错细节：${detail}</div>
+<div class="detail" role="${kind === "error" ? "alert" : "status"}">${kind === "error" ? "报错细节" : "连接细节"}：${detail}</div>
 ${action}
 </main></body></html>`;
   return new Response(html, { status, headers });
