@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { Miniflare } from "miniflare";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import {
@@ -13,12 +14,13 @@ import {
 } from "../dist/mcp-fixtures.mjs";
 
 const TEST_ID = "00000000-0000-4000-8000-000000000008";
+const APPLICATION_SECRET = "guanlan-workerd-secret-at-least-32-bytes";
 const FIXTURE_BINDINGS = {
   MCP_RESOURCE_URL: MCP_TEST_RESOURCE_URL,
   CLOUD_AUTH_ISSUER: MCP_TEST_ISSUER,
   CLOUD_AUTH_JWKS_URL: MCP_TEST_JWKS_URL,
   GUANLAN_APP_ID: MCP_TEST_APP_ID,
-  GUANLAN_APP_SECRET: "guanlan-workerd-secret-at-least-32-bytes",
+  GUANLAN_APP_SECRET_SHA256: createHash("sha256").update(APPLICATION_SECRET).digest("hex"),
   GUANLAN_MANIFEST_REVISION: "1",
 };
 
@@ -290,7 +292,7 @@ test("real workerd exposes the Mira ID V1 application declaration and retires th
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           appId: MCP_TEST_APP_ID,
-          appSecret: FIXTURE_BINDINGS.GUANLAN_APP_SECRET,
+          appSecret: APPLICATION_SECRET,
         }),
       },
     );
