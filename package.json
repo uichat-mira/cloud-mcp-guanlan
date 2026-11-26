@@ -1,7 +1,7 @@
 {
   "name": "@uichat-mira/cloud-mcp-guanlan",
   "private": true,
-  "version": "0.0.0-poc",
+  "version": "0.1.0-dev.0",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -35,5 +35,6 @@
     "miniflare": "^4.0.0",
     "typescript": "^5.9.0",
     "wrangler": "^4.0.0"
-  }
+  },
+  "description": "观澜 Guanlan — Mira Cloud 的持续新闻采集与消费记忆服务"
 }
