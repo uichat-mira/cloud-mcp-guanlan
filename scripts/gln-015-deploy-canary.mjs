@@ -100,27 +100,41 @@ const run = (args, options = {}) => {
 try {
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
 
-  // Deploy code and non-secret bindings first. This canary is isolated and has
-  // no Cron trigger; a brief application_not_configured window is acceptable.
-  run(["deploy"]);
-
-  // Secret material never enters the generated config, repository or stdout.
+  // Put the application secret on the retained isolated Worker before the code
+  // cutover. Wrangler deploy preserves existing secret bindings, so the first
+  // V1 version that receives traffic is already fully configured.
   run(["secret", "put", "GUANLAN_APP_SECRET"], {
     input: process.env.GUANLAN_APP_SECRET + "\n",
   });
 
+  run(["deploy"]);
+
   const base = resource.origin;
-  const expectJson = async (url, expectedStatus, init) => {
-    const response = await fetch(url, init);
-    if (response.status !== expectedStatus) {
-      throw new Error(`Smoke check ${new URL(url).pathname} returned ${response.status}; expected ${expectedStatus}`);
+  const expectJson = async (url, expectedStatus, init, options = {}) => {
+    const attempts = options.attempts ?? 1;
+    let lastStatus = 0;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const response = await fetch(url, init);
+      lastStatus = response.status;
+      const text = await response.text();
+      let body = null;
+      if (text) {
+        try { body = JSON.parse(text); } catch { body = text; }
+      }
+      if (response.status === expectedStatus) return { response, body };
+      const transient =
+        options.retryStatuses?.includes(response.status) &&
+        attempt < attempts;
+      if (!transient) {
+        throw new Error(
+          `Smoke check ${new URL(url).pathname} returned ${response.status}; expected ${expectedStatus}`,
+        );
+      }
+      await new Promise(resolve => setTimeout(resolve, 250 * attempt));
     }
-    const text = await response.text();
-    let body = null;
-    if (text) {
-      try { body = JSON.parse(text); } catch { body = text; }
-    }
-    return { response, body };
+    throw new Error(
+      `Smoke check ${new URL(url).pathname} stayed at ${lastStatus}; expected ${expectedStatus}`,
+    );
   };
 
   const health = await expectJson(base + "/health", 200);
@@ -128,7 +142,12 @@ try {
     throw new Error("Health payload does not identify the Guanlan product");
   }
 
-  const manifestResult = await expectJson(base + "/.well-known/mira-application", 200);
+  const manifestResult = await expectJson(
+    base + "/.well-known/mira-application",
+    200,
+    undefined,
+    { attempts: 6, retryStatuses: [404, 503] },
+  );
   const manifest = manifestResult.body;
   if (
     manifest?.schemaVersion !== "1" ||
