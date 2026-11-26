@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   APPLICATION_MANIFEST_PATH,
   APPLICATION_VERIFY_PATH,
@@ -8,9 +9,10 @@ import {
   resolveApplicationInstance,
 } from "../dist/mcp-unit.mjs";
 
+const TEST_SECRET = "guanlan-test-secret-at-least-32-bytes";
 const ENV = {
   GUANLAN_APP_ID: "guanlan.test.instance",
-  GUANLAN_APP_SECRET: "guanlan-test-secret-at-least-32-bytes",
+  GUANLAN_APP_SECRET_SHA256: createHash("sha256").update(TEST_SECRET).digest("hex"),
   GUANLAN_MANIFEST_REVISION: "1",
   MCP_RESOURCE_URL: "https://guanlan.example/mcp",
 };
@@ -55,10 +57,10 @@ test("Guanlan publishes one Mira ID V1 application with one standard MCP news se
   assert.equal(new Set(refs).size, refs.length);
 
   const serialized = JSON.stringify(manifest);
-  assert.doesNotMatch(serialized, /GUANLAN_APP_SECRET|test-secret/);
+  assert.doesNotMatch(serialized, /GUANLAN_APP_SECRET|test-secret|SHA256/);
 });
 
-test("application discovery and registration proof are same-origin and secret-safe", async () => {
+test("application discovery and registration proof compare only the AppSecret digest", async () => {
   const discovery = await handleApplicationRequest(
     new Request("https://guanlan.example" + APPLICATION_MANIFEST_PATH),
     ENV,
@@ -74,7 +76,7 @@ test("application discovery and registration proof are same-origin and secret-sa
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         appId: ENV.GUANLAN_APP_ID,
-        appSecret: ENV.GUANLAN_APP_SECRET,
+        appSecret: TEST_SECRET,
       }),
     }),
     ENV,
@@ -108,7 +110,7 @@ test("application discovery and registration proof are same-origin and secret-sa
       },
       body: JSON.stringify({
         appId: ENV.GUANLAN_APP_ID,
-        appSecret: ENV.GUANLAN_APP_SECRET,
+        appSecret: TEST_SECRET,
       }),
     }),
     ENV,
@@ -125,7 +127,7 @@ test("application discovery and registration proof are same-origin and secret-sa
 test("application endpoints fail closed when instance identity is incomplete", async () => {
   for (const key of [
     "GUANLAN_APP_ID",
-    "GUANLAN_APP_SECRET",
+    "GUANLAN_APP_SECRET_SHA256",
     "GUANLAN_MANIFEST_REVISION",
     "MCP_RESOURCE_URL",
   ]) {
@@ -138,4 +140,12 @@ test("application endpoints fail closed when instance identity is incomplete", a
     );
     assert.equal(response.status, 503, key);
   }
+
+  assert.equal(
+    resolveApplicationInstance({
+      ...ENV,
+      GUANLAN_APP_SECRET_SHA256: "not-a-sha256-digest",
+    }),
+    null,
+  );
 });
