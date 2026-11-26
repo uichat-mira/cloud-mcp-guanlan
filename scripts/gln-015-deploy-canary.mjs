@@ -204,6 +204,31 @@ try {
     throw new Error("Protected-resource metadata did not bind the V1 resource");
   }
 
+  const oauthStart = await fetch(base + "/auth/start", { redirect: "manual" });
+  if (oauthStart.status !== 302) {
+    throw new Error(`OAuth start returned ${oauthStart.status}; expected 302`);
+  }
+  const oauthLocation = new URL(oauthStart.headers.get("location") ?? "");
+  if (
+    oauthLocation.origin !== new URL(process.env.CLOUD_AUTH_ISSUER).origin ||
+    oauthLocation.pathname !== "/v1/oauth/authorize" ||
+    oauthLocation.searchParams.get("client_id") !== base + "/oauth-client" ||
+    oauthLocation.searchParams.get("redirect_uri") !== base + "/auth/callback" ||
+    oauthLocation.searchParams.get("code_challenge_method") !== "S256"
+  ) {
+    throw new Error("OAuth start did not target the registered Mira ID V1 client");
+  }
+  const flowCookies = oauthStart.headers.get("set-cookie") ?? "";
+  if (
+    !flowCookies.includes("__Host-guanlan_oauth_state=") ||
+    !flowCookies.includes("__Host-guanlan_oauth_verifier=") ||
+    !/HttpOnly/i.test(flowCookies) ||
+    !/Secure/i.test(flowCookies) ||
+    !/SameSite=Lax/i.test(flowCookies)
+  ) {
+    throw new Error("OAuth start did not issue hardened short-lived flow cookies");
+  }
+
   await expectJson(base + "/mcp", 401, { method: "POST" });
   await expectJson(base + "/internal/guanlan-registrations", 404, { method: "POST" });
 
