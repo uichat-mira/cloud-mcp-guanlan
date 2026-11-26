@@ -9,6 +9,7 @@ import {
   MCP_TEST_JWKS_URL,
   MCP_TEST_RESOURCE_URL,
   MCP_TEST_SCOPE,
+  MCP_TEST_WRITE_SCOPE,
 } from "../dist/mcp-fixtures.mjs";
 
 const TEST_ID = "00000000-0000-4000-8000-000000000008";
@@ -235,7 +236,7 @@ test("unauthorized callers see 401 discovery but no tools or data", async () => 
     const document = await metadata.json();
     assert.equal(document.resource, MCP_TEST_RESOURCE_URL);
     assert.deepEqual(document.authorization_servers, [MCP_TEST_ISSUER]);
-    assert.deepEqual(document.scopes_supported, [MCP_TEST_SCOPE]);
+    assert.deepEqual(document.scopes_supported, [MCP_TEST_SCOPE, MCP_TEST_WRITE_SCOPE]);
 
     for (const [token, status] of [
       ["fixture-wrong-issuer", 401],
