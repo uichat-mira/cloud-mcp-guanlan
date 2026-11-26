@@ -1,13 +1,12 @@
 /**
- * GLN-014 reconnaissance entry. It re-exports the *existing* deployed resource
- * verifier and configuration resolver so a read-only probe can exercise the
- * real contract instead of a re-implementation. No production module changes.
+ * GLN-014/V1 contract entry. It re-exports the real resource verifier and
+ * configuration resolver for read-only cross-service probes.
  */
 export { createCloudAuthVerifier } from "../src/mcp/auth";
 export {
   CLOUD_AUTH_TOKEN_ISSUER,
+  GUANLAN_INSTANCE_SERVICE_ID,
   GUANLAN_REQUIRED_SCOPE,
-  GUANLAN_SERVICE_AUDIENCE,
   GUANLAN_WRITE_SCOPE,
   resolveMcpConfig,
 } from "../src/mcp/config";
