@@ -20,9 +20,20 @@ Mira ID 的应用/服务声明属于 MCP 外层。它不能复制 Tool Schema、
 
 ## 2. Deployment identity
 
+当前正式公开实例身份固定为：
+
+- Origin: `https://guanlan.tomz.io`
+- `APP_ID = guanlan.tomz.io`
+- MCP resource: `https://guanlan.tomz.io/mcp`
+- OAuth client: `https://guanlan.tomz.io/oauth-client`
+- OAuth callback: `https://guanlan.tomz.io/auth/callback`
+
+底层仍可复用隔离 Worker/D1；公开实例身份不得随 Worker 名、Cloudflare account subdomain 或部署供应商变化。旧 `guanlan.gln015.canary` / `*.workers.dev` 仅保留为历史验收事实，不再作为可登记成功路径。
+
 部署必须显式提供：
 
-- `GUANLAN_APP_ID`: 稳定实例身份；同一部署升级时保持不变，复制为另一个实例时重新生成。
+- `GUANLAN_APP_ID`: 稳定实例身份；当前正式实例固定为 `guanlan.tomz.io`。同一部署升级时保持不变，复制为另一个实例时重新生成。
+- `GLN015_PUBLIC_ORIGIN`: 当前 GLN-015 部署的精确公开 HTTPS Origin；正式实例为 `https://guanlan.tomz.io`。
 - `GUANLAN_APP_SECRET_SHA256`: 登记 `AppSecret` 的 SHA-256 十六进制摘要。Worker 运行时不保存明文 AppSecret；明文只允许在所有权登记或隔离构建 probe 中短暂存在，不进入 manifest、日志、MCP token 或持久运行配置。
 - `GUANLAN_MANIFEST_REVISION`: manifest 内容变化时递增。
 - `MCP_RESOURCE_URL`: 精确的 HTTPS `/mcp` resource。
