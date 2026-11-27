@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {readFile} from "node:fs/promises";
 import {Miniflare} from "miniflare";
 import {rss} from "./fixtures.mjs";
+import {retryDelayMs} from "../dist/scheduler.mjs";
 
 const now=Date.now();
 const overdue=new Date(now-60_000).toISOString();
@@ -75,13 +76,18 @@ test("upstream failure backs off while other source progresses; successful retry
     return new Response(rss(1));
   },async({db,worker})=>{
     await seed(db,"feed-a"); await seed(db,"feed-b");
+    const failureStartedAt=Date.now();
     assert.equal((await tick(worker)).outcome,"ok");
+    const failureFinishedAt=Date.now();
     let row=await db.prepare("SELECT retry_count,last_status,last_error,due_at FROM poc_sources WHERE id='feed-a'").first();
     assert.equal(row.retry_count,1);
     assert.equal(row.last_status,"failed");
     assert.equal(row.last_error,"feed_http_503");
-    assert(Date.parse(row.due_at)>now+300_000);
-    assert(Date.parse(row.due_at)<now+345_000);
+    const firstRetryDelay=retryDelayMs(0,"feed-a");
+    assert(Date.parse(row.due_at)>=failureStartedAt+firstRetryDelay,
+      "Retry must be based on actual failure time, never an earlier module timestamp");
+    assert(Date.parse(row.due_at)<=failureFinishedAt+firstRetryDelay,
+      "Retry must stay inside the deterministic first-failure delay window");
     assert.equal((await db.prepare("SELECT last_status FROM poc_sources WHERE id='feed-b'").first()).last_status,"succeeded");
     await tick(worker,now+60_000); // neither is due
     assert.equal((await db.prepare("SELECT retry_count FROM poc_sources WHERE id='feed-a'").first()).retry_count,1);
