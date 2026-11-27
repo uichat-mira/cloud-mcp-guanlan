@@ -16,6 +16,7 @@ const ENV = {
   MCP_RESOURCE_URL: "https://guanlan.example/mcp",
   CLOUD_AUTH_ISSUER: "https://auth.example.com",
 };
+const MANAGE_ENV = { ...ENV, GUANLAN_WEB_SESSION_SECRET: "W".repeat(43) };
 const CODE = "mca_v1." + "A".repeat(22) + "." + "B".repeat(43);
 const ACCESS_TOKEN = "mas_v1." + "C".repeat(22) + "." + "D".repeat(43);
 
@@ -83,7 +84,7 @@ test("OAuth start emits PKCE S256 and short-lived Secure HttpOnly flow cookies",
   assert.equal(response.headers.get("cache-control"), "no-store");
 });
 
-test("OAuth callback establishes and re-verifies one application session without persisting its token", async () => {
+test("OAuth callback establishes a short-lived Guanlan management session without persisting the Mira ID token", async () => {
   const start = await handleApplicationOAuthRequest(
     new Request("https://guanlan.example" + APPLICATION_OAUTH_START_PATH),
     ENV,
@@ -133,14 +134,16 @@ test("OAuth callback establishes and re-verifies one application session without
         "&state=" + encodeURIComponent(state),
       { headers: { cookie: flowCookie(state, verifier) } },
     ),
-    ENV,
+    MANAGE_ENV,
     fetchFn,
   );
   assert.equal(calls, 2);
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /观澜已连接/);
-  assert.match(html, /临时应用 access token 未写入/);
+  assert.match(html, /打开管理界面/);
+  assert.match(html, /临时 Mira ID access token 未持久化/);
+  assert.match(response.headers.get("set-cookie"), /__Host-guanlan_manage=/);
   assert.equal(html.includes(ACCESS_TOKEN), false);
   assert.equal(html.includes("account-sensitive-id"), false);
   assert.equal(html.includes(CODE), false);

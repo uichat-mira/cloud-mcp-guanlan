@@ -16,6 +16,13 @@ import {
   handleApplicationOAuthRequest,
 } from "./application/oauth";
 import type { PocEnv } from "./ingest";
+import {
+  handleManagementRequest,
+  MANAGEMENT_LOGOUT_PATH,
+  MANAGEMENT_PATH,
+  MANAGEMENT_SUBSCRIPTIONS_PATH,
+  type ManagementEnv,
+} from "./manage";
 import { MCP_METADATA_PATH, MCP_RESOURCE_PATH, type McpEnv } from "./mcp/config";
 import {
   createMcpRuntime,
@@ -23,7 +30,7 @@ import {
   type McpRuntimeResult,
 } from "./mcp/runtime";
 
-export type GuanlanEnv = PocEnv & McpEnv & ApplicationEnv;
+export type GuanlanEnv = PocEnv & McpEnv & ApplicationEnv & ManagementEnv;
 export type McpRuntimeResolver = (env: GuanlanEnv) => McpRuntimeResult;
 
 export function createApp(
@@ -94,6 +101,13 @@ export function createApp(
     const response = await handleApplicationOAuthRequest(c.req.raw, c.env);
     return response ?? c.json({ error: "not_found" }, 404);
   });
+
+  for (const path of [MANAGEMENT_PATH, MANAGEMENT_SUBSCRIPTIONS_PATH, MANAGEMENT_LOGOUT_PATH]) {
+    app.all(path, async c => {
+      const response = await handleManagementRequest(c.req.raw, c.env);
+      return response ?? c.json({ error: "not_found" }, 404);
+    });
+  }
 
   // The only agent-facing HTTP surface. Missing Mira ID V1 trust stays closed.
   app.all(MCP_RESOURCE_PATH, c => {

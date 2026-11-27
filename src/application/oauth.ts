@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { renderGuanlanResultPage } from "../brand";
 import {
+  issueManagementSessionCookie,
+  type ManagementSessionEnv,
+} from "../manage/session";
+import {
   resolveApplicationInstance,
   type ApplicationEnv,
 } from "./instance";
@@ -12,7 +16,7 @@ const STATE_COOKIE = "__Host-guanlan_oauth_state";
 const VERIFIER_COOKIE = "__Host-guanlan_oauth_verifier";
 const FLOW_TTL_SECONDS = 300;
 
-export type ApplicationOAuthEnv = ApplicationEnv & {
+export type ApplicationOAuthEnv = ApplicationEnv & ManagementSessionEnv & {
   CLOUD_AUTH_ISSUER?: string;
 };
 
@@ -165,14 +169,15 @@ function resultPage(
   message: string,
   detail: string,
   headers = securityHeaders(),
+  action?: { href: "/" | "/auth/start" | "/manage"; label: string },
 ): Response {
   const html = renderGuanlanResultPage({
     kind,
     title,
     message,
     detail,
-    actionHref: kind === "success" ? "/" : "/auth/start",
-    actionLabel: kind === "success" ? "返回观澜" : "重新连接",
+    actionHref: action?.href ?? (kind === "success" ? "/" : "/auth/start"),
+    actionLabel: action?.label ?? (kind === "success" ? "返回观澜" : "重新连接"),
   });
   return new Response(html, { status, headers });
 }
@@ -323,13 +328,24 @@ export async function handleApplicationOAuthRequest(
       return failed(502, "application_session_mismatch", "Mira ID 会话确认结果与授权兑换不一致。", headers);
     }
 
+    const managementReady = await issueManagementSessionCookie(
+      headers,
+      identity.data,
+      env,
+    );
+
     return resultPage(
       200,
       "success",
       "观澜已连接",
-      "Mira ID 已建立观澜的应用授权与服务关联。你的 Mira 终端现在可以发现观澜新闻服务。",
-      "授权完成；临时应用 access token 未写入 Cookie、D1 或浏览器存储。",
+      managementReady
+        ? "Mira ID 已建立观澜的应用授权，并为当前浏览器建立短时管理会话。"
+        : "Mira ID 已建立观澜的应用授权与服务关联。你的 Mira 终端现在可以发现观澜新闻服务。",
+      managementReady
+        ? "临时 Mira ID access token 未持久化；管理会话仅保存签名后的账户主体与短时权限。"
+        : "授权完成；临时应用 access token 未写入 Cookie、D1 或浏览器存储。",
       headers,
+      managementReady ? { href: "/manage", label: "打开管理界面" } : undefined,
     );
   } catch {
     return failed(502, "cloud_auth_unavailable", "当前无法完成 Mira ID 会话确认。", headers);
