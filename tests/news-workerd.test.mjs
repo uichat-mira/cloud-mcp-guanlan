@@ -5,24 +5,22 @@ import { readFile } from "node:fs/promises";
 import { Miniflare } from "miniflare";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import {
-  MCP_TEST_AUDIENCE,
+  MCP_TEST_APP_ID,
   MCP_TEST_ISSUER,
   MCP_TEST_JWKS_URL,
   MCP_TEST_RESOURCE_URL,
-  MCP_TEST_SCOPE,
 } from "../dist/mcp-fixtures.mjs";
 
-// GLN-009 T3: real Miniflare/workerd + D1 evidence for authorized, paginated,
-// status-filtered MCP news reading. Uses the real MCP transport (modern and
-// legacy stateless clients), never the domain service alone.
+// GLN-009/015 T3: real Miniflare/workerd + D1 evidence for authorized,
+// paginated, status-filtered MCP news reading over the current 2026-07-28
+// transport. Legacy initialize clients are rejected.
 
 const TEST_ID = "00000000-0000-4000-8000-000000000009";
 const FIXTURE_BINDINGS = {
   MCP_RESOURCE_URL: MCP_TEST_RESOURCE_URL,
   CLOUD_AUTH_ISSUER: MCP_TEST_ISSUER,
   CLOUD_AUTH_JWKS_URL: MCP_TEST_JWKS_URL,
-  MCP_AUDIENCE: MCP_TEST_AUDIENCE,
-  MCP_REQUIRED_SCOPES: MCP_TEST_SCOPE,
+  GUANLAN_APP_ID: MCP_TEST_APP_ID,
 };
 const STAMP = "2026-11-01T00:00:00.000Z";
 const MIGRATIONS = [
@@ -72,27 +70,27 @@ async function seedDomain(db) {
     source("feed-a2", "https://feeds.example.com/a2.xml"),
     source("feed-b", "https://feeds.example.com/b.xml"),
   ];
-  for (const [sql, values] of statements) await db.prepare(sql).bind(...values).run();
+  for (const [sql, values] of statements) {
+    await db.prepare(sql).bind(...values).run();
+  }
 
-  for (const accountId of ["account-a", "account-b", "account-empty"]) {
-    await db.prepare("INSERT INTO guanlan_accounts (account_id,created_at) VALUES (?,?)").bind(accountId, STAMP).run();
-  }
-  for (const [accountId, consumerId] of [
-    ["account-a", "consumer-1"],
-    ["account-a", "consumer-2"],
-    ["account-b", "consumer-b"],
-    ["account-empty", "consumer-empty"],
-  ]) {
+  for (const accountId of ["account-a", "account-c", "account-b", "account-empty"]) {
+    await db.prepare("INSERT INTO guanlan_accounts (account_id,created_at) VALUES (?,?)")
+      .bind(accountId, STAMP).run();
     await db.prepare("INSERT INTO guanlan_consumers (account_id,consumer_id,created_at) VALUES (?,?,?)")
-      .bind(accountId, consumerId, STAMP).run();
+      .bind(accountId, accountId, STAMP).run();
   }
-  await db.prepare("INSERT INTO guanlan_account_subscriptions (account_id,source_id,interval_hours,created_at) VALUES (?,?,?,?)")
-    .bind("account-a", "feed-shared", 1, STAMP).run();
+
+  for (const accountId of ["account-a", "account-c"]) {
+    await db.prepare("INSERT INTO guanlan_account_subscriptions (account_id,source_id,interval_hours,created_at) VALUES (?,?,?,?)")
+      .bind(accountId, "feed-shared", 1, STAMP).run();
+  }
   await db.prepare("INSERT INTO guanlan_account_subscriptions (account_id,source_id,interval_hours,created_at) VALUES (?,?,?,?)")
     .bind("account-b", "feed-b", 1, STAMP).run();
-  for (const [consumerId, sourceId] of [["consumer-1", "feed-a1"], ["consumer-2", "feed-a2"]]) {
+
+  for (const [accountId, sourceId] of [["account-a", "feed-a1"], ["account-c", "feed-a2"]]) {
     await db.prepare("INSERT INTO guanlan_consumer_subscriptions (account_id,consumer_id,source_id,interval_hours,created_at) VALUES (?,?,?,?,?)")
-      .bind("account-a", consumerId, sourceId, 1, STAMP).run();
+      .bind(accountId, accountId, sourceId, 1, STAMP).run();
   }
 }
 
@@ -177,7 +175,7 @@ async function walk(client, args = {}) {
   throw new Error("pagination did not terminate");
 }
 
-test("real D1: A/B accounts and A's two consumers only see their effective sources", async () => {
+test("real D1: separate account consumers only see their effective sources", async () => {
   await withWorker(async ({ mf, db }) => {
     await seedBaseline(db);
     const cases = [
@@ -199,17 +197,17 @@ test("real D1: A/B accounts and A's two consumers only see their effective sourc
   });
 });
 
-test("real D1: same URL has a different status per consumer, and history needs an explicit filter", async () => {
+test("real D1: same URL has a different status per account consumer, and history needs an explicit filter", async () => {
   await withWorker(async ({ mf, db }) => {
     await seedBaseline(db);
-    await decide(db, "account-a", "consumer-1", NEWS.shared1, "pending", "feed-shared");
-    await decide(db, "account-a", "consumer-1", NEWS.shared2, "ignored", "feed-shared");
-    await decide(db, "account-a", "consumer-2", NEWS.shared1, "adopted", "feed-shared");
+    await decide(db, "account-a", "account-a", NEWS.shared1, "pending", "feed-shared");
+    await decide(db, "account-a", "account-a", NEWS.shared2, "ignored", "feed-shared");
+    await decide(db, "account-c", "account-c", NEWS.shared1, "adopted", "feed-shared");
 
     const a1 = await connect(mf, "fixture-consumer-1", modern());
     const a2 = await connect(mf, "fixture-consumer-2", modern());
     try {
-      // Consumer 1 default: unread + pending. shared1 is pending, shared2 is ignored.
+      // Account A default: unread + pending. shared1 is pending, shared2 is ignored.
       const a1Default = await callNews(a1.client, { limit: 50 });
       const a1Items = itemsOf(a1Default);
       const pendingItem = a1Items.find(item => item.url === NEWS.shared1);
@@ -219,11 +217,11 @@ test("real D1: same URL has a different status per consumer, and history needs a
       assert.equal(a1Items.some(item => item.url === NEWS.shared2), false);
       assert.equal(a1Items.some(item => item.url === NEWS.a2), false);
 
-      // Consumer 1 history: ignored only.
+      // Account A history: ignored only.
       const a1Ignored = itemsOf(await callNews(a1.client, { status: ["ignored"], limit: 50 }));
       assert.deepEqual(a1Ignored.map(item => [item.url, item.status]), [[NEWS.shared2, "ignored"]]);
 
-      // Consumer 2 default: shared1 is adopted, so it is history for consumer 2.
+      // Account C default: shared1 is adopted, so it is history for consumer 2.
       const a2Default = itemsOf(await callNews(a2.client, { limit: 50 }));
       assert.equal(a2Default.some(item => item.url === NEWS.shared1), false);
       const unreadItem = a2Default.find(item => item.url === NEWS.shared2);
@@ -231,7 +229,7 @@ test("real D1: same URL has a different status per consumer, and history needs a
       // No ledger row = implied unread = version 0.
       assert.equal(unreadItem.stateVersion, 0);
 
-      // Consumer 2 history: adopted shared1 only; consumer 1's decisions never leak.
+      // Account C history: adopted shared1 only; consumer 1's decisions never leak.
       const a2Adopted = itemsOf(await callNews(a2.client, { status: ["adopted"], limit: 50 }));
       assert.deepEqual(a2Adopted.map(item => [item.url, item.status]), [[NEWS.shared1, "adopted"]]);
       assert.equal(a2Adopted.some(item => item.url === NEWS.shared2), false);
@@ -254,7 +252,7 @@ test("real D1: >50 equal-timestamp rows page with no duplicate and no omission",
     // Every third item is already adopted for consumer 1: the status predicate
     // must be applied to the whole stream, not only to the current page.
     const adopted = urls.filter((_, index) => index % 3 === 0);
-    for (const url of adopted) await decide(db, "account-a", "consumer-1", url, "adopted", "feed-shared");
+    for (const url of adopted) await decide(db, "account-a", "account-a", url, "adopted", "feed-shared");
 
     const { client } = await connect(mf, "fixture-consumer-1", modern());
     try {
@@ -434,7 +432,7 @@ test("real D1: a database failure is an explicit tool error, never an empty page
 test("real D1: reading never writes news, leases, subscriptions or the decision ledger", async () => {
   await withWorker(async ({ mf, db }) => {
     await seedBaseline(db);
-    await decide(db, "account-a", "consumer-1", NEWS.shared1, "pending", "feed-shared");
+    await decide(db, "account-a", "account-a", NEWS.shared1, "pending", "feed-shared");
     const tables = [
       "poc_sources", "poc_news", "guanlan_accounts", "guanlan_consumers",
       "guanlan_account_subscriptions", "guanlan_consumer_subscriptions",
@@ -462,31 +460,33 @@ test("real D1: reading never writes news, leases, subscriptions or the decision 
   });
 });
 
-test("real D1: modern and legacy stateless clients get the identical page", async () => {
+test("real D1: legacy MCP clients are rejected instead of receiving news", async () => {
   await withWorker(async ({ mf, db }) => {
     await seedBaseline(db);
-    await decide(db, "account-a", "consumer-1", NEWS.shared1, "pending", "feed-shared");
+    await decide(db, "account-a", "account-a", NEWS.shared1, "pending", "feed-shared");
     const modernClient = await connect(mf, "fixture-consumer-1", modern());
-    const legacyClient = await connect(mf, "fixture-consumer-1", { supportedProtocolVersions: ["2025-06-18"] });
     try {
       assert.equal(modernClient.client.getProtocolEra(), "modern");
-      assert.equal(legacyClient.client.getProtocolEra(), "legacy");
-      const query = { limit: 2, status: ["unread", "pending"] };
-      const a = await callNews(modernClient.client, query);
-      const b = await callNews(legacyClient.client, query);
-      assert.deepEqual(b.structuredContent, a.structuredContent);
-      assert.equal(b.content[0].text, a.content[0].text);
+      const page = await callNews(modernClient.client, {
+        limit: 2,
+        status: ["unread", "pending"],
+      });
+      assert.ok(page.structuredContent);
+      await assert.rejects(
+        connect(mf, "fixture-consumer-1", {
+          supportedProtocolVersions: ["2025-06-18"],
+        }),
+        /protocol|legacy|initialize|version/i,
+      );
     } finally {
       await modernClient.client.close();
-      await legacyClient.client.close();
     }
   });
 });
-
 test("real D1: JSON and Markdown describe the same authorized page", async () => {
   await withWorker(async ({ mf, db }) => {
     await seedBaseline(db);
-    await decide(db, "account-a", "consumer-1", NEWS.shared1, "pending", "feed-shared");
+    await decide(db, "account-a", "account-a", NEWS.shared1, "pending", "feed-shared");
     const { client } = await connect(mf, "fixture-consumer-1", modern());
     try {
       const result = await callNews(client, { limit: 1 });
@@ -515,7 +515,7 @@ test("real D1: a long source id is preserved exactly, not truncated", async () =
     await db.prepare("INSERT INTO poc_sources (id,url,interval_hours,due_at) VALUES (?,?,?,?)")
       .bind(longSourceId, "https://feeds.example.com/long.xml", 1, STAMP).run();
     await db.prepare("INSERT INTO guanlan_consumer_subscriptions (account_id,consumer_id,source_id,interval_hours,created_at) VALUES (?,?,?,?,?)")
-      .bind("account-a", "consumer-1", longSourceId, 1, STAMP).run();
+      .bind("account-a", "account-a", longSourceId, 1, STAMP).run();
     await addNews(db, "https://news.example.com/long-source", longSourceId, {
       title: "Long source id",
       ingestedAt: "2026-11-01T09:00:00.000Z",
@@ -570,7 +570,7 @@ test("real D1: WHOAMI still reports the token-derived identity and the tool stay
       }
       const whoami = await client.callTool({ name: "guanlan_whoami", arguments: {} });
       assert.equal(whoami.structuredContent.accountId, "account-a");
-      assert.equal(whoami.structuredContent.consumerId, "consumer-1");
+      assert.equal(whoami.structuredContent.consumerId, "account-a");
       const invalid = await callNews(client, { limit: 51 });
       assert.equal(invalid.isError, true);
       assert.match(invalid.content[0].text, /Input validation error/);

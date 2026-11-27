@@ -310,7 +310,7 @@ export function createGuanlanMcp(
   });
   const handler = createMcpHandler(
     ({ authInfo }) => buildMcpServer(authInfo, reader, decider),
-    { legacy: "stateless", maxRequestBodySize: MAX_REQUEST_BODY_BYTES },
+    { legacy: "reject", maxRequestBodySize: MAX_REQUEST_BODY_BYTES },
   );
   const metadata = buildMcpProtectedResourceMetadata(config);
   const metadataPath = new URL(config.metadataUrl).pathname;
@@ -323,12 +323,15 @@ export function createGuanlanMcp(
         return Response.json({ error: "not_found" }, { status: 404 });
       }
 
-      const rejected =
-        hostHeaderValidationResponse(request, [config.resourceUrl.hostname]) ??
-        originValidationResponse(request, [config.resourceUrl.hostname]);
-      if (rejected) return rejected;
+      const hostRejected = hostHeaderValidationResponse(request, [config.resourceUrl.hostname]);
+      if (hostRejected) return hostRejected;
 
+      // RFC 9728 metadata is public discovery. Browser clients may fetch it
+      // cross-origin; origin validation applies only to the protected /mcp path.
       if (path === metadataPath) return metadataResponse(request, metadata);
+
+      const originRejected = originValidationResponse(request, [config.resourceUrl.hostname]);
+      if (originRejected) return originRejected;
 
       const auth = await gate(request);
       if (auth instanceof Response) return auth;

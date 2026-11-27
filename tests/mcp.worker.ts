@@ -8,7 +8,7 @@ const app = createApp({
   resolveMcpRuntime: env => createMcpRuntime(env, {
     verifier: createFixtureVerifier(FIXTURE_TOKENS, {
       issuer: CLOUD_AUTH_TOKEN_ISSUER,
-      audience: env.MCP_AUDIENCE ?? "",
+      audience: env.MCP_RESOURCE_URL ?? "",
     }),
   }),
 });

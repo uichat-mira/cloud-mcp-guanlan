@@ -1,23 +1,27 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { Miniflare } from "miniflare";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import {
-  MCP_TEST_AUDIENCE,
+  MCP_TEST_APP_ID,
   MCP_TEST_ISSUER,
   MCP_TEST_JWKS_URL,
   MCP_TEST_RESOURCE_URL,
   MCP_TEST_SCOPE,
+  MCP_TEST_WRITE_SCOPE,
 } from "../dist/mcp-fixtures.mjs";
 
 const TEST_ID = "00000000-0000-4000-8000-000000000008";
+const APPLICATION_SECRET = "guanlan-workerd-secret-at-least-32-bytes";
 const FIXTURE_BINDINGS = {
   MCP_RESOURCE_URL: MCP_TEST_RESOURCE_URL,
   CLOUD_AUTH_ISSUER: MCP_TEST_ISSUER,
   CLOUD_AUTH_JWKS_URL: MCP_TEST_JWKS_URL,
-  MCP_AUDIENCE: MCP_TEST_AUDIENCE,
-  MCP_REQUIRED_SCOPES: MCP_TEST_SCOPE,
+  GUANLAN_APP_ID: MCP_TEST_APP_ID,
+  GUANLAN_APP_SECRET_SHA256: createHash("sha256").update(APPLICATION_SECRET).digest("hex"),
+  GUANLAN_MANIFEST_REVISION: "1",
 };
 
 async function withWorker(scriptPath, bindings, run) {
@@ -67,10 +71,8 @@ async function seed(db) {
   const createdAt = "2026-10-31T00:00:00.000Z";
   await db.prepare("INSERT INTO guanlan_accounts (account_id,created_at) VALUES (?,?)")
     .bind("account-a", createdAt).run();
-  for (const consumerId of ["consumer-1", "consumer-2"]) {
-    await db.prepare("INSERT INTO guanlan_consumers (account_id,consumer_id,created_at) VALUES (?,?,?)")
-      .bind("account-a", consumerId, createdAt).run();
-  }
+  await db.prepare("INSERT INTO guanlan_consumers (account_id,consumer_id,created_at) VALUES (?,?,?)")
+    .bind("account-a", "account-a", createdAt).run();
   await db.prepare(`
     INSERT INTO guanlan_account_subscriptions (account_id,source_id,interval_hours,created_at)
     VALUES (?,?,?,?)
@@ -138,7 +140,7 @@ test("real workerd modern MCP client discovers and calls read-only tools", async
       assert.match(invalid.content[0].text, /Input validation error/);
 
       const whoami = await client.callTool({ name: "guanlan_whoami", arguments: {} });
-      assert.equal(whoami.structuredContent.consumerId, "consumer-1");
+      assert.equal(whoami.structuredContent.consumerId, "account-a");
       assert.equal(whoami.structuredContent.accountId, "account-a");
       assert.deepEqual(whoami.structuredContent.scopes, [MCP_TEST_SCOPE]);
 
@@ -147,7 +149,7 @@ test("real workerd modern MCP client discovers and calls read-only tools", async
         name: "guanlan_whoami",
         arguments: { consumerId: "consumer-2", accountId: "account-b" },
       });
-      assert.equal(spoofed.structuredContent.consumerId, "consumer-1");
+      assert.equal(spoofed.structuredContent.consumerId, "account-a");
       assert.equal(spoofed.structuredContent.accountId, "account-a");
     } finally {
       await client.close();
@@ -155,29 +157,17 @@ test("real workerd modern MCP client discovers and calls read-only tools", async
   });
 });
 
-test("real workerd 2025-06-18 and 2025-11-25 initialize clients use the documented stateless legacy path", async () => {
+test("real workerd rejects pre-2026 MCP initialize clients instead of downgrading", async () => {
   await withWorker("dist/mcp-test-worker.mjs", FIXTURE_BINDINGS, async ({ mf, db }) => {
     await seed(db);
     for (const version of ["2025-06-18", "2025-11-25"]) {
-      const { client, transport } = await connect(mf, "fixture-consumer-2", {
-        supportedProtocolVersions: [version],
-      });
-      try {
-        assert.equal(client.getProtocolEra(), "legacy");
-        assert.equal(client.getNegotiatedProtocolVersion(), version);
-        assert.equal(transport.sessionId, undefined);
-        const listed = await client.listTools();
-        assert.equal(listed.tools.length, 3);
-        const news = await client.callTool({
-          name: "guanlan_news_recent",
-          arguments: { limit: 5 },
-        });
-        assert.equal(news.isError, undefined);
-        assert.equal(news.structuredContent.items.length, 1);
-        assert.match(news.content[0].text, /Example story/);
-      } finally {
-        await client.close();
-      }
+      await assert.rejects(
+        connect(mf, "fixture-consumer-1", {
+          supportedProtocolVersions: [version],
+        }),
+        /protocol|legacy|initialize|version/i,
+        version,
+      );
     }
   });
 });
@@ -250,7 +240,7 @@ test("unauthorized callers see 401 discovery but no tools or data", async () => 
     const document = await metadata.json();
     assert.equal(document.resource, MCP_TEST_RESOURCE_URL);
     assert.deepEqual(document.authorization_servers, [MCP_TEST_ISSUER]);
-    assert.deepEqual(document.scopes_supported, [MCP_TEST_SCOPE]);
+    assert.deepEqual(document.scopes_supported, [MCP_TEST_SCOPE, MCP_TEST_WRITE_SCOPE]);
 
     for (const [token, status] of [
       ["fixture-wrong-issuer", 401],
@@ -258,7 +248,7 @@ test("unauthorized callers see 401 discovery but no tools or data", async () => 
       ["fixture-relay-audience", 401],
       ["fixture-expired", 401],
       ["fixture-missing-consumer", 401],
-      ["fixture-wrong-scope", 403],
+      ["fixture-wrong-scope", 401],
     ]) {
       const rejected = await mf.dispatchFetch(MCP_TEST_RESOURCE_URL, {
         method: "GET",
@@ -269,6 +259,51 @@ test("unauthorized callers see 401 discovery but no tools or data", async () => 
       });
       assert.equal(rejected.status, status, token);
     }
+  });
+});
+
+test("real workerd exposes the Mira ID V1 application declaration and retires the HMAC side channel", async () => {
+  await withWorker("dist/mcp-test-worker.mjs", FIXTURE_BINDINGS, async ({ mf }) => {
+    const manifestResponse = await mf.dispatchFetch(
+      "https://127.0.0.1/.well-known/mira-application",
+    );
+    assert.equal(manifestResponse.status, 200);
+    const manifest = await manifestResponse.json();
+    assert.equal(manifest.schemaVersion, "1");
+    assert.equal(manifest.appId, MCP_TEST_APP_ID);
+    assert.equal(manifest.name, "观澜 Guanlan");
+    assert.equal(manifest.services.length, 1);
+    assert.equal(manifest.services[0].serviceId, "news");
+    assert.equal(manifest.services[0].resource, MCP_TEST_RESOURCE_URL);
+    assert.equal(manifest.services[0].protocol.version, "2026-07-28");
+    assert.deepEqual(
+      new Set(manifest.services[0].capabilities.flatMap(capability => capability.toolRefs)),
+      new Set(["guanlan_whoami", "guanlan_news_recent", "guanlan_news_decide"]),
+    );
+    assert.doesNotMatch(
+      JSON.stringify(manifest),
+      /guanlan-workerd-secret-at-least-32-bytes/,
+    );
+
+    const verified = await mf.dispatchFetch(
+      "https://127.0.0.1/mira/verify-registration",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          appId: MCP_TEST_APP_ID,
+          appSecret: APPLICATION_SECRET,
+        }),
+      },
+    );
+    assert.equal(verified.status, 200);
+    assert.deepEqual(await verified.json(), { ok: true, appId: MCP_TEST_APP_ID });
+
+    const retired = await mf.dispatchFetch(
+      "https://127.0.0.1/internal/guanlan-registrations",
+      { method: "POST" },
+    );
+    assert.equal(retired.status, 404);
   });
 });
 

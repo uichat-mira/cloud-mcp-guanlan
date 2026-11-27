@@ -4,23 +4,19 @@ import {
   type AuthInfo,
 } from "@modelcontextprotocol/server";
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
+import { GUANLAN_REQUIRED_SCOPE, GUANLAN_WRITE_SCOPE } from "./config";
 
 export type GuanlanPrincipal = {
-  /** Cloud Auth subject; the Cloud Account that owns the consumer. */
+  /** Mira ID subject; the Cloud Account that owns this Guanlan data. */
   accountId: string;
-  /** Stable consumer identity minted into the credential, never supplied by a tool argument. */
+  /** V1 uses the verified account subject as the stable Guanlan consumer. */
   consumerId: string;
   scopes: string[];
-  /** Seconds since epoch, as in the JWT `exp` claim. */
   expiresAt: number;
   issuer: string;
   audience: string;
 };
 
-/**
- * Narrow resource-server verifier contract. Cloud Auth owns issuance; Guanlan
- * only verifies an already-issued access token and derives the principal.
- */
 export interface GuanlanTokenVerifier {
   verifyAccessToken(token: string): Promise<GuanlanPrincipal>;
 }
@@ -29,7 +25,8 @@ export type CloudAuthVerifierOptions = {
   issuer: string;
   audience: string;
   jwksUrl: URL;
-  consumerClaim: string;
+  appId: string;
+  serviceId: string;
   /** Test/integration injection point; production uses the configured remote JWKS. */
   keySet?: JWTVerifyGetKey;
   clockToleranceSeconds?: number;
@@ -38,29 +35,33 @@ export type CloudAuthVerifierOptions = {
 const invalidToken = (): OAuthError =>
   new OAuthError(OAuthErrorCode.InvalidToken, "invalid_token");
 
-const tokenScopes = (payload: Record<string, unknown>): string[] => {
-  // Cloud Auth V0 signs scope as an array; standard OAuth access tokens may
-  // encode space-delimited scopes. Reject malformed arrays rather than
-  // silently discarding entries and accidentally broadening authority.
-  if (Array.isArray(payload.scope)) {
-    if (!payload.scope.every(value => typeof value === "string" && value.length > 0)) {
-      throw invalidToken();
-    }
-    return payload.scope;
-  }
-  if (typeof payload.scope === "string") {
-    return payload.scope.split(/\s+/).filter(Boolean);
-  }
-  return [];
-};
+const claimKeys = new Set([
+  "iss",
+  "sub",
+  "device_id",
+  "aud",
+  "app_id",
+  "service_id",
+  "resource",
+  "scope",
+  "iat",
+  "nbf",
+  "exp",
+]);
+
+const allowedScopes = new Set([GUANLAN_REQUIRED_SCOPE, GUANLAN_WRITE_SCOPE]);
 
 /**
- * The deployed verifier: Cloud Auth public JWKS, exact issuer/audience binding,
- * a non-empty subject and a token-bound consumer identity. Anything else is an
- * opaque 401; no fallback to a test fixture or an unconfigured local trust.
+ * Verify exactly one Mira ID V1 instance/resource credential.
+ *
+ * Account and consumer identity are derived from the verified subject; callers
+ * cannot choose another consumer through JWT extension claims or tool input.
  */
-export function createCloudAuthVerifier(options: CloudAuthVerifierOptions): GuanlanTokenVerifier {
+export function createCloudAuthVerifier(
+  options: CloudAuthVerifierOptions,
+): GuanlanTokenVerifier {
   const keySet = options.keySet ?? createRemoteJWKSet(options.jwksUrl);
+
   return {
     async verifyAccessToken(token: string): Promise<GuanlanPrincipal> {
       let payload: Record<string, unknown>;
@@ -68,28 +69,54 @@ export function createCloudAuthVerifier(options: CloudAuthVerifierOptions): Guan
         const verified = await jwtVerify(token, keySet, {
           issuer: options.issuer,
           audience: options.audience,
-          // The current Cloud Auth public JWKS contains Ed25519 keys only.
           algorithms: ["EdDSA"],
-          clockTolerance: options.clockToleranceSeconds ?? 5,
-          requiredClaims: ["iss", "aud", "exp", "sub"],
+          clockTolerance: options.clockToleranceSeconds ?? 0,
+          requiredClaims: [...claimKeys],
         });
         payload = verified.payload as Record<string, unknown>;
       } catch {
         throw invalidToken();
       }
 
-      const accountId = typeof payload.sub === "string" ? payload.sub : "";
-      const consumerId = typeof payload[options.consumerClaim] === "string"
-        ? payload[options.consumerClaim] as string
-        : "";
-      const expiresAt = typeof payload.exp === "number" ? payload.exp : NaN;
-      if (!accountId || !consumerId || !Number.isFinite(expiresAt)) throw invalidToken();
+      const now = Math.floor(Date.now() / 1000);
+      const scopes = payload.scope;
+      if (
+        Object.keys(payload).some(key => !claimKeys.has(key)) ||
+        payload.aud !== options.audience ||
+        payload.resource !== options.audience ||
+        payload.app_id !== options.appId ||
+        payload.service_id !== options.serviceId ||
+        typeof payload.sub !== "string" ||
+        !payload.sub.trim() ||
+        typeof payload.device_id !== "string" ||
+        !payload.device_id.trim() ||
+        typeof payload.iat !== "number" ||
+        !Number.isSafeInteger(payload.iat) ||
+        typeof payload.nbf !== "number" ||
+        !Number.isSafeInteger(payload.nbf) ||
+        typeof payload.exp !== "number" ||
+        !Number.isSafeInteger(payload.exp) ||
+        payload.iat > now ||
+        payload.nbf < payload.iat ||
+        payload.nbf > now ||
+        payload.exp <= now ||
+        payload.exp <= payload.nbf ||
+        payload.exp - payload.iat > 600 ||
+        !Array.isArray(scopes) ||
+        scopes.length < 1 ||
+        scopes.length > 2 ||
+        !scopes.every(scope => typeof scope === "string" && allowedScopes.has(scope)) ||
+        new Set(scopes).size !== scopes.length ||
+        !scopes.includes(GUANLAN_REQUIRED_SCOPE)
+      ) {
+        throw invalidToken();
+      }
 
       return {
-        accountId,
-        consumerId,
-        scopes: tokenScopes(payload),
-        expiresAt,
+        accountId: payload.sub,
+        consumerId: payload.sub,
+        scopes: [...scopes] as string[],
+        expiresAt: payload.exp,
         issuer: options.issuer,
         audience: options.audience,
       };
@@ -99,10 +126,6 @@ export function createCloudAuthVerifier(options: CloudAuthVerifierOptions): Guan
 
 export type FixtureTokenTable = Record<string, GuanlanPrincipal>;
 
-/**
- * Deterministic, test-only verifier. It is imported only by test worker entries
- * so the deployed module cannot select it through an environment value.
- */
 export function createFixtureVerifier(
   tokens: FixtureTokenTable,
   expected: { issuer: string; audience: string },
@@ -111,24 +134,30 @@ export function createFixtureVerifier(
     async verifyAccessToken(token: string): Promise<GuanlanPrincipal> {
       const principal = tokens[token];
       if (!principal) throw invalidToken();
-      if (principal.issuer !== expected.issuer || principal.audience !== expected.audience) {
+      if (
+        principal.issuer !== expected.issuer ||
+        principal.audience !== expected.audience ||
+        !principal.accountId ||
+        !principal.consumerId ||
+        !principal.scopes.includes(GUANLAN_REQUIRED_SCOPE)
+      ) {
         throw invalidToken();
       }
-      if (!principal.accountId || !principal.consumerId) throw invalidToken();
       return { ...principal, scopes: [...principal.scopes] };
     },
   };
 }
 
-/** Adapter from the Guanlan principal to the SDK's auth pass-through shape. */
-export function authInfoFromPrincipal(token: string, principal: GuanlanPrincipal, resourceUrl: URL): AuthInfo {
+export function authInfoFromPrincipal(
+  token: string,
+  principal: GuanlanPrincipal,
+  resourceUrl: URL,
+): AuthInfo {
   return {
     token,
     clientId: principal.consumerId,
     scopes: principal.scopes,
     expiresAt: principal.expiresAt,
-    // JWT aud has already been verified against the configured Guanlan audience.
-    // MCP expectedResource is the actual /mcp URL, not the service-audience label.
     resource: resourceUrl,
     extra: {
       accountId: principal.accountId,
@@ -139,8 +168,9 @@ export function authInfoFromPrincipal(token: string, principal: GuanlanPrincipal
   };
 }
 
-/** Reads only verifier-derived identity; tool arguments never supply these values. */
-export function principalFromAuthInfo(authInfo: AuthInfo | undefined): GuanlanPrincipal {
+export function principalFromAuthInfo(
+  authInfo: AuthInfo | undefined,
+): GuanlanPrincipal {
   const extra = authInfo?.extra;
   const accountId = extra?.accountId;
   const consumerId = extra?.consumerId;
@@ -155,8 +185,9 @@ export function principalFromAuthInfo(authInfo: AuthInfo | undefined): GuanlanPr
     !Array.isArray(authInfo.scopes) ||
     typeof authInfo.expiresAt !== "number"
   ) {
-    throw new OAuthError(OAuthErrorCode.InvalidToken, "invalid_token");
+    throw invalidToken();
   }
+
   return {
     accountId,
     consumerId,
