@@ -217,3 +217,21 @@ test("management storage failure is explicit instead of rendering an empty confi
     assert.doesNotMatch(html, /暂无关注点/);
   });
 });
+
+
+test("management refuses to hide an effective subscription outside the approved source catalog", async () => {
+  await withWorker(async ({ mf, db }) => {
+    await seed(db);
+    await insert(db,
+      "INSERT INTO guanlan_account_subscriptions(account_id,source_id,interval_hours,created_at) VALUES(?,?,?,?)",
+      "account-a", "legacy", 1, stamp);
+    const cookie = await sessionCookie();
+
+    const response = await mf.dispatchFetch(ORIGIN + "/manage", { headers: { cookie } });
+    assert.equal(response.status, 503);
+    const html = await response.text();
+    assert.match(html, /暂时无法读取配置/);
+    assert.match(html, /management_storage_unavailable/);
+    assert.doesNotMatch(html, /配置与采集/);
+  });
+});

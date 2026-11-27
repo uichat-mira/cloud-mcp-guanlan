@@ -107,9 +107,21 @@ export async function readManagementSnapshot(
   const consumerRows = rowsOf<SubscriptionRow>(batch[2]);
 
   const sourceByUrl = new Map(sourceRows.map(row => [row.url, row]));
+  const sourceById = new Map(sourceRows.map(row => [row.id, row]));
+  const approvedUrls = new Set(APPROVED_PUBLIC_FEEDS.map(feed => feed.url));
   const accountBySource = new Map(accountRows.map(row => [row.source_id, row.interval_hours]));
   const consumerBySource = new Map(consumerRows.map(row => [row.source_id, row.interval_hours]));
   const effectiveBySource = new Map(effective.sources.map(source => [source.sourceId, source]));
+
+  for (const source of effective.sources) {
+    const stored = sourceById.get(source.sourceId);
+    if (!stored || !approvedUrls.has(stored.url)) {
+      throw new ManagementReadError(
+        "storage_failure",
+        "management_source_outside_approved_catalog",
+      );
+    }
+  }
 
   const sources = APPROVED_PUBLIC_FEEDS.map(feed => {
     const row = sourceByUrl.get(feed.url) ?? null;
