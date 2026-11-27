@@ -9,6 +9,7 @@ const required = [
   "GLN015_D1_DATABASE_ID",
   "GUANLAN_APP_ID",
   "GUANLAN_MANIFEST_REVISION",
+  "GLN015_PUBLIC_ORIGIN",
   "MCP_RESOURCE_URL",
   "CLOUD_AUTH_ISSUER",
   "CLOUD_AUTH_JWKS_URL",
@@ -55,16 +56,31 @@ if (!/^[0-9a-f-]{36}$/i.test(process.env.GLN015_D1_DATABASE_ID)) {
   throw new Error("GLN015_D1_DATABASE_ID must be a UUID");
 }
 
+const publicOrigin = new URL(process.env.GLN015_PUBLIC_ORIGIN);
+if (
+  publicOrigin.protocol !== "https:" ||
+  publicOrigin.username ||
+  publicOrigin.password ||
+  publicOrigin.pathname !== "/" ||
+  publicOrigin.search ||
+  publicOrigin.hash ||
+  publicOrigin.origin !== process.env.GLN015_PUBLIC_ORIGIN
+) {
+  throw new Error("GLN015_PUBLIC_ORIGIN must be an exact HTTPS origin without a trailing path");
+}
+if (publicOrigin.origin === "https://guanlan.tomz.io" && appId !== "guanlan.tomz.io") {
+  throw new Error("The formal Guanlan origin requires the stable APP_ID guanlan.tomz.io");
+}
+
 const resource = new URL(process.env.MCP_RESOURCE_URL);
 if (
   resource.protocol !== "https:" ||
   resource.pathname !== "/mcp" ||
   resource.search ||
   resource.hash ||
-  !resource.hostname.endsWith(".workers.dev") ||
-  !resource.hostname.startsWith(workerName + ".")
+  resource.origin !== publicOrigin.origin
 ) {
-  throw new Error("MCP_RESOURCE_URL must be the exact retained canary workers.dev /mcp URL");
+  throw new Error("MCP_RESOURCE_URL must be the exact /mcp resource under GLN015_PUBLIC_ORIGIN");
 }
 for (const key of ["CLOUD_AUTH_ISSUER", "CLOUD_AUTH_JWKS_URL"]) {
   const url = new URL(process.env[key]);
