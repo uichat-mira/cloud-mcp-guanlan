@@ -52,7 +52,7 @@ export type ManagementSession =
 function base64url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
 function decodeBase64url(value: string): Uint8Array | null {
@@ -127,11 +127,24 @@ function resolveSecret(env: ManagementSessionEnv): string | null {
   return typeof secret === "string" && SESSION_SECRET_PATTERN.test(secret) ? secret : null;
 }
 
+const SESSION_CLAIM_KEYS = new Set([
+  "appId",
+  "aud",
+  "authorities",
+  "exp",
+  "iat",
+  "iss",
+  "sub",
+  "v",
+]);
+
 function parseClaims(value: unknown): SessionClaims | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
+  const keys = Object.keys(candidate);
   if (
-    Object.keys(candidate).sort().join(",") !== "appId,aud,authorities,exp,iat,iss,sub,v" ||
+    keys.length !== SESSION_CLAIM_KEYS.size ||
+    keys.some(key => !SESSION_CLAIM_KEYS.has(key)) ||
     candidate.v !== 1 ||
     candidate.iss !== "mira:cloud-auth" ||
     typeof candidate.sub !== "string" ||
