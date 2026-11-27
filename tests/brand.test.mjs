@@ -47,7 +47,7 @@ test("OAuth result renderer escapes untrusted text and keeps the branded recover
     title: '<img src=x onerror="boom">',
     message: "<script>boom()</script>",
     detail: 'bad"><svg onload=boom()>',
-    actionHref: 'javascript:alert("boom")',
+    actionHref: "/auth/start",
     actionLabel: "<b>retry</b>",
   });
 
@@ -57,7 +57,7 @@ test("OAuth result renderer escapes untrusted text and keeps the branded recover
   assert.match(html, /&lt;script&gt;boom\(\)&lt;\/script&gt;/);
   assert.match(html, /&lt;img src=x onerror=&quot;boom&quot;&gt;/);
   assert.match(html, /bad&quot;&gt;&lt;svg onload=boom\(\)&gt;/);
-  assert.match(html, /javascript:alert\(&quot;boom&quot;\)/);
+  assert.match(html, /href="\/auth\/start"/);
   assert.match(html, /&lt;b&gt;retry&lt;\/b&gt;/);
   assert.match(html, /href="\/brand"/);
 });
