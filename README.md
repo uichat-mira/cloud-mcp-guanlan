@@ -8,7 +8,7 @@
 
 ## 产品与架构真相
 
-**[产品与服务设计 v1](docs/product-design.md)** 是产品边界的单一真相源。当前身份与协议切换以 **[GLN-015 工程合同](docs/engineering/gln-015-registration-receiver.md)** 与 [Issue #28](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/28) 为准。正式 Web 品牌资产见 **[观澜 Guanlan Web 品牌物料](docs/branding/guanlan/README.md)**；首页、Mira ID OAuth 结果页与 `/brand` 预览共用同一套标志、色彩与字体语义。
+**[产品与服务设计 v1](docs/product-design.md)** 是产品边界的单一真相源。当前身份与协议切换以 **[GLN-015 工程合同](docs/engineering/gln-015-registration-receiver.md)** 与 [Issue #28](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/28) 为准；Guanlan 自有管理面以 **[GLN-016 Web 管理合同](docs/engineering/gln-016-web-management.md)** 与 [Issue #34](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/34) 为准。正式 Web 品牌资产见 **[观澜 Guanlan Web 品牌物料](docs/branding/guanlan/README.md)**；首页、Mira ID OAuth 结果页、`/manage` 与 `/brand` 共用同一套品牌语义。
 
 当前链路：
 
@@ -26,6 +26,7 @@
 - **读取无副作用，决定显式写回。** 未读、待决、已采用、已忽略由明确写操作改变；换会话后仍可继续。
 - **标准 MCP。** 只接受 `2026-07-28` 当前协议路径；旧 `2025-06-18` / `2025-11-25` initialize 不静默降级。
 - **一个服务声明的真实权限。** 当前 Mira ID V1 对 `news` 签发 manifest 声明的完整 `guanlan.read + guanlan.write` scope；`guanlan_news_decide` 仍检查 write 作为纵深防御。
+- **管理面归 Guanlan。** `/manage` 是云端新闻配置的官方 Web UI；Desktop/Mobile 后续提供入口和上下文衔接，不各自维护订阅/关注点的影子状态机。管理会话来自已确认的 Mira ID application session，MCP read/write scope 不自动成为配置权限。
 - **建议不等于配置修改。** Agent 可以提出来源/关注点调整建议，但配置变更需要独立、明确的产品授权路径。
 
 ## 当前 MCP 工具
@@ -40,7 +41,7 @@
 
 Cloudflare Workers + D1 仍是当前首选运行形态，但**是否长期留在 Cloudflare 由上线后的真实运行数据决定**。GLN-003 已做过隔离 Canary 与 CPU 剖析；这不等于生产容量承诺，也不应阻塞观澜先完成产品化与 Mira ID 纵切。
 
-仓库默认配置 `wrangler.jsonc` 目前仍是不可生产部署的占位配置；生产 D1、密钥、Cron 和环境晋级必须走独立部署纪律，不能从功能分支直接冒充生产。
+仓库默认配置 `wrangler.jsonc` 目前仍是不可生产部署的占位配置；生产 D1、密钥、Cron 和环境晋级必须走独立部署纪律，不能从功能分支直接冒充生产。启用 Guanlan Web 管理面还需要独立高熵 `GUANLAN_WEB_SESSION_SECRET`；它只用于签名短时 HttpOnly 管理会话，不得提交到仓库、日志或前端。
 
 ## 工程状态
 
@@ -54,6 +55,7 @@ Cloudflare Workers + D1 仍是当前首选运行形态，但**是否长期留在
 - [GLN-009](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/16)：授权新闻分页与状态查询。
 - [GLN-010](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/22)：MCP 消费状态写回。
 - [GLN-015](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/28)：Mira ID V1 应用实例与标准 MCP 切换（当前进行中）。
+- [GLN-016](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/34)：Guanlan 自有 Web 管理界面 V1（来源、两级订阅与采集健康）。
 
 工程约束见 [AGENTS.md](AGENTS.md)。有运行时代码变更时执行 `bash scripts/check.sh` / `npm run check`；Actions 的 Repository Contract 与 Mira Gate 是证据，不替代维护者对实际链路的验收。
 
