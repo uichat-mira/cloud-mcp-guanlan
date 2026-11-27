@@ -8,7 +8,7 @@
 
 ## 产品与架构真相
 
-**[产品与服务设计 v1](docs/product-design.md)** 是产品边界的单一真相源。当前身份与协议切换以 **[GLN-015 工程合同](docs/engineering/gln-015-registration-receiver.md)** 与 [Issue #28](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/28) 为准。
+**[产品与服务设计 v1](docs/product-design.md)** 是产品边界的单一真相源。当前身份与协议切换以 **[GLN-015 工程合同](docs/engineering/gln-015-registration-receiver.md)** 与 [Issue #28](https://github.com/uichat-mira/cloud-mcp-guanlan/issues/28) 为准。正式 Web 品牌资产见 **[观澜 Guanlan Web 品牌物料](docs/branding/guanlan/README.md)**；首页、Mira ID OAuth 结果页与 `/brand` 预览共用同一套标志、色彩与字体语义。
 
 当前链路：
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { renderGuanlanResultPage } from "../brand";
 import {
   resolveApplicationInstance,
   type ApplicationEnv,
@@ -165,34 +166,14 @@ function resultPage(
   detail: string,
   headers = securityHeaders(),
 ): Response {
-  const action = kind === "success"
-    ? '<a class="action" href="/">返回观澜</a>'
-    : '<a class="action" href="/auth/start">重新连接</a>';
-  const html = `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title} — 观澜 Guanlan</title>
-<style>
-:root{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif}
-body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f5f3ef;color:#171b25}
-main{width:min(620px,calc(100% - 48px));padding:72px 0}
-.mark{font:500 13px/1.2 ui-serif,Georgia,serif;letter-spacing:.16em;opacity:.55}
-h1{margin:18px 0 16px;font:500 clamp(36px,7vw,58px)/1 ui-serif,Georgia,serif;letter-spacing:-.035em}
-p{margin:0;max-width:540px;font-size:16px;line-height:1.8;opacity:.72}
-.detail{margin-top:22px;padding:14px 16px;border:1px solid color-mix(in srgb,currentColor 16%,transparent);border-radius:14px;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.68}
-.action{display:inline-block;margin-top:28px;padding:11px 16px;border:1px solid currentColor;border-radius:999px;color:inherit;text-decoration:none;font-size:14px}
-@media(prefers-color-scheme:dark){body{background:#151a2c;color:#fff6ed}}
-</style>
-</head>
-<body><main>
-<div class="mark">MIRA CLOUD / GUANLAN</div>
-<h1>${title}</h1>
-<p>${message}</p>
-<div class="detail" role="${kind === "error" ? "alert" : "status"}">${kind === "error" ? "报错细节" : "连接细节"}：${detail}</div>
-${action}
-</main></body></html>`;
+  const html = renderGuanlanResultPage({
+    kind,
+    title,
+    message,
+    detail,
+    actionHref: kind === "success" ? "/" : "/auth/start",
+    actionLabel: kind === "success" ? "返回观澜" : "重新连接",
+  });
   return new Response(html, { status, headers });
 }
 
