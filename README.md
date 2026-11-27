@@ -4,7 +4,7 @@
 
 观澜持续采集用户有权访问的新闻源，保存标题、摘要、原文链接与必要元数据，并向授权 Agent 提供统一、可追溯、可分页的候选视图。观澜负责**采集、过滤、去重和记账**；理解原文、判断价值与采取行动仍由 Agent 完成。
 
-> **当前状态（2026-11-27）：** 业务底座已有 Workers/D1 采集、租约、来源安全、多用户数据模型、订阅读取、消费状态账本，以及标准 MCP 的 `guanlan_news_recent`、`guanlan_whoami`、`guanlan_news_decide`。GLN-015 已在隔离 Cloudflare Worker/D1 上完成 **Mira ID Open Platform V1 应用声明 + MCP 2026-07-28** 云端 smoke；旧 HMAC 账号空间注册、固定 `mira:cloud-guanlan` audience、客户端 consumer claim 与 legacy MCP fallback 已退出目标架构。仍待真实 Mira ID 账号完成应用所有权登记与 V1 服务凭据纵切，尚未生产上线。
+> **当前状态（2026-11-27）：** 业务底座已有 Workers/D1 采集、租约、来源安全、多用户数据模型、订阅读取、消费状态账本，以及标准 MCP 的 `guanlan_news_recent`、`guanlan_whoami`、`guanlan_news_decide`。GLN-015 已在隔离 Cloudflare Worker/D1 上完成 **Mira ID Open Platform V1 应用声明 + MCP 2026-07-28** 云端 smoke，并切换到正式公开实例身份 **`https://guanlan.tomz.io` / `APP_ID=guanlan.tomz.io` / `https://guanlan.tomz.io/mcp`**；旧 workers.dev APP_ID 只保留为历史验证事实。旧 HMAC 账号空间注册、固定 `mira:cloud-guanlan` audience、客户端 consumer claim 与 legacy MCP fallback 已退出目标架构。仍待真实 Mira ID 账号完成应用所有权登记与 V1 服务凭据纵切，尚未启用生产 Cron。
 
 ## 产品与架构真相
 
